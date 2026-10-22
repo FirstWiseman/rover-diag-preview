@@ -1,0 +1,13 @@
+{
+  "name": "Rover Diag",
+  "short_name": "Rover Diag",
+  "description": "Preview of the Rover Diag app for a Rover 400 1.6 with Webasto heater (simulated data).",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#1e4a35",
+  "icons": [
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
