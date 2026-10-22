@@ -1,7 +1,7 @@
 {
-  "name": "Rover Diag",
-  "short_name": "Rover Diag",
-  "description": "Preview of the Rover Diag app for a Rover 400 1.6 with Webasto heater (simulated data).",
+  "name": "Rover",
+  "short_name": "Rover",
+  "description": "Preview of the Rover app for a Rover 400 1.6 with Webasto heater (simulated data).",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#000000",

@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Rover Diag">
+<meta name="apple-mobile-web-app-title" content="Rover">
 <meta name="theme-color" content="#1e4a35">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="apple-touch-icon.png">
@@ -32,7 +32,7 @@ html.app .sheet-bg{padding:8px var(--colr) calc(12px + env(safe-area-inset-botto
 @media (orientation:landscape) and (max-height:500px){html.app .car{height:220px}html.app .nav h2{font-size:26px}}
 @media (min-width:900px){html.app .car{height:360px}}
 </style>
-<title>Rover Diag Preview</title>
+<title>Rover Preview</title>
 
 <script>(function(){function fit(){var r=document.documentElement,sa=navigator.standalone||matchMedia('(display-mode: standalone)').matches;if(!sa){r.style.removeProperty('--appH');return}var land=innerWidth>innerHeight,a=screen.width,b=screen.height,h=land?Math.min(a,b):Math.max(a,b);r.style.setProperty('--appH',Math.max(h,innerHeight)+'px')}fit();addEventListener('resize',fit);addEventListener('orientationchange',function(){setTimeout(fit,300)})})();</script>
 </head>
@@ -233,7 +233,7 @@ body { background: var(--page); color: var(--page-ink); font-family: var(--font)
 <div class="stage">
   <div class="phone"><div class="screen" id="screen"></div></div>
   <aside class="caption">
-    <h1>Rover Diag, in your browser</h1>
+    <h1>Rover, in your browser</h1>
     <p>A clickable replica of the iPhone app's screens, fed by the same simulated data the app uses in Simulator mode: a MEMS 1.9 behind rover-mems-agent, plus a Webasto heater and 5AS on the bridge.</p>
     <p>The real app is SwiftUI and has to be built with xtool on your machine. Values here are simulated, not from your car.</p>
     <div class="jump" id="jump"></div>
@@ -261,9 +261,9 @@ const S = {
   immo: { mode: 'normal', tests: {} },
   sheet: null, traffic: [], agentLog: [],
 };
-const ENGINE_SOURCES = ['Rover Diag (Pi)', 'rover-mems-agent', 'Simulator'];
+const ENGINE_SOURCES = ['Rover (Pi)', 'rover-mems-agent', 'Simulator'];
 // Rover Engine has the documented MEMS 1.x commands the agent lacks.
-const ownEngine = () => S.agentSource === 'Rover Diag (Pi)' && ['1.9', '1.x'].includes(S.selectedECU || S.ecu);
+const ownEngine = () => S.agentSource === 'Rover (Pi)' && ['1.9', '1.x'].includes(S.selectedECU || S.ecu);
 const ECUS = { '1.9': 'MEMS 1.9 (16-pin OBD)', '1.x': 'MEMS 1.2 / 1.3 / 1.6 (3-pin)', '2J': 'MEMS 2J', '3': 'MEMS 3', 'rc5': 'RC5 SRS airbag' };
 const now = () => performance.now();
 S.connectedAt = now() - 5000;
@@ -384,7 +384,7 @@ const screens = {
         : `Connects to the ${dev} bridge "${name}" over Bluetooth LE. See Firmware/rover-bridge.`)
       : pi ? 'The USB bridge runs next to rover-mems-agent on the Raspberry Pi 3B (installed by the rover-pi package), with one USB cable per module. Uses the agent\'s address by default, port 35000.'
         : `Join the bridge's Wi-Fi network "${name}" first (password rover400). Address 192.168.4.1, port 35000. See Firmware/rover-bridge.`;
-    return { title: 'Rover Diag', body:
+    return { title: 'Rover', body:
     sec([`<div class="row"><span class="lbl">Bridge device</span><select class="select" data-change="bridgeDevice" ${S.adapterConnected ? 'disabled' : ''}>${Object.keys(BRIDGE_NAMES).map(d => `<option ${d === dev ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`,
       seg(['Wi-Fi', 'Bluetooth', 'Simulator'], kind, 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"'),
       ...(kind === 'Wi-Fi' ? [`<div class="row"><input class="input" id="usbhost" value="${esc(pi ? S.usbHost : '192.168.4.1')}" aria-label="${pi ? 'Pi address' : 'Bridge IP'}" ${pi ? '' : 'disabled'}><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
@@ -407,7 +407,7 @@ const screens = {
     const where = LIVE.on ? 'on ' + LIVE.info.hostname + ', reached through this page' : 'on the Raspberry Pi 3B (rover-pi package)';
     let body = sec(rows, 'Engine connection', S.agentSource === 'Simulator' ? 'Simulated engine with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.'
       : S.agentSource === 'rover-mems-agent' ? `Optional: rover-mems-agent ${where} (port 8080), for all MEMS versions including 2J and 3. It keeps the ECU cable until it is restarted, even after Stop.`
-      : `Rover Diag's own engine service ${where} (port 8081): MEMS 1.9, MEMS 1.2/1.3/1.6 and the RC5 airbag, on the ECU cable ${S.ecuPort}. Stop releases the cable. For MEMS 2J and 3 choose rover-mems-agent.`);
+      : `Rover's own engine service ${where} (port 8081): MEMS 1.9, MEMS 1.2/1.3/1.6 and the RC5 airbag, on the ECU cable ${S.ecuPort}. Stop releases the cable. For MEMS 2J and 3 choose rover-mems-agent.`);
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
     if (S.running && S.selectedECU === S.ecu) {
       ecuRows.push(ecuConnected() ? lv(`✓ Connected to ${ECUS[S.selectedECU]}`, '', 'ok') : `<div class="row"><div class="spinner"></div><span class="lbl">Waiting for the ECU to answer…</span></div>`);
@@ -611,10 +611,17 @@ const PAINTS = [['Original charcoal', null], ['British Racing Green', '#1e4a35']
 const FINISH = { Metallic: { metalness: 0.55, roughness: 0.28 }, Solid: { metalness: 0, roughness: 0.5 } };
 const CAR_DIM = { frontAxle: 1.425, rearAxle: -1.155, hubY: 0.35, track: 0.78 };
 const INDICATORS = [[2.20, 0.68, 0.72], [2.20, 0.68, -0.72], [-2.25, 0.86, 0.66], [-2.25, 0.86, -0.66]];
-// Body colour (null = original) and finish, saved per viewer.
-let paint = { hex: null, finish: 'Metallic' };
-try { const v = JSON.parse(localStorage.getItem('roverDiagPaint2') || 'null'); if (v && FINISH[v.finish]) paint = v; } catch (e) {}
-const paintName = () => (PAINTS.find(p => p[1] === paint.hex) || [`Custom ${(paint.hex || '').toUpperCase()}`])[0];
+const WHEELS = [['Original silver', null], ['Gunmetal', '#53565b'], ['Anthracite', '#2e3033'], ['Gloss black', '#111111'], ['White', '#ededed'],
+  ['Gold', '#c9a24a'], ['Bronze', '#8c6a3f'], ['British Racing Green', '#1e4a35'], ['Britannia Red', '#990000']];
+// Alloy wheel faces ("[Metal Aluminum Anodized]2" in the SketchUp model).
+const WHEEL_MAT = /^\[?_?Metal[ _]Aluminum[ _]Anodized\]?[ _]?2$/i;
+// Body colour (null = original), finish and wheel colour, saved per viewer; the menu edits body or wheels.
+let paint = { hex: null, finish: 'Metallic', wheel: null, target: 'Body' };
+try { const v = JSON.parse(localStorage.getItem('roverDiagPaint2') || 'null'); if (v && FINISH[v.finish]) paint = Object.assign(paint, v, { target: 'Body' }); } catch (e) {}
+const paintList = () => paint.target === 'Wheels' ? WHEELS : PAINTS;
+const paintCur = () => paint.target === 'Wheels' ? paint.wheel : paint.hex;
+const paintSet = (hex) => { if (paint.target === 'Wheels') paint.wheel = hex; else paint.hex = hex; };
+const paintName = () => (paintList().find(p => p[1] === paintCur()) || [`Custom ${(paintCur() || '').toUpperCase()}`])[0];
 S.part = null;
 
 const PART_NAMES = { engine: 'Engine', fan: 'Radiator fan', heater: 'Webasto heater', battery: 'Battery', fuel: 'Fuel pump', abs: 'ABS', srs: 'Airbag (SRS)',
@@ -674,10 +681,12 @@ function carBuild() {
     holder.updateMatrixWorld(true);
     box = new T.Box3().setFromObject(holder);
     holder.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
-    CAR.paintMats = [];
+    CAR.paintMats = []; CAR.wheelMats = [];
     gltf.scene.traverse(o => {
       if (o.isMesh && /^RoverPaint/.test(o.material.name || '') && !CAR.paintMats.some(m => m.material === o.material)) {
         CAR.paintMats.push({ material: o.material, original: o.material.color.clone() });
+      } else if (o.isMesh && WHEEL_MAT.test(o.material.name || '') && !CAR.wheelMats.some(m => m.material === o.material)) {
+        CAR.wheelMats.push({ material: o.material, original: o.material.color.clone() });
       }
     });
     car.add(holder);
@@ -696,6 +705,9 @@ function carApplyPaint() {
   for (const pm of CAR.paintMats || []) {
     if (paint.hex) pm.material.color.set(paint.hex).convertSRGBToLinear(); else pm.material.color.copy(pm.original);
     pm.material.metalness = f.metalness; pm.material.roughness = f.roughness;
+  }
+  for (const wm of CAR.wheelMats || []) {
+    if (paint.wheel) wm.material.color.set(paint.wheel).convertSRGBToLinear(); else wm.material.color.copy(wm.original);
   }
 }
 
@@ -873,11 +885,13 @@ function partCard(p) {
         tog('Hazard lights test', S.immo.tests[13], 'immo:13'), tog('Horn test', S.immo.tests[8], 'immo:8'), tog('5AS LED test', S.immo.tests[9], 'immo:9'));
       break;
     case 'paint':
-      rows.push(`<div class="swatches">${PAINTS.map(([n, c], i) => `<button class="swatch ${c === paint.hex ? 'on' : ''}" style="background:${c || '#515151'}" data-act="paint:${i}" aria-label="${esc(n)}" title="${esc(n)}"></button>`).join('')}</div>`,
-        lv('Colour', esc(paintName())),
-        `<div class="row"><label class="lbl" for="carColor">Custom colour</label><input type="color" class="colorin" id="carColor" value="${paint.hex || '#515151'}"></div>`,
-        seg(['Metallic', 'Solid'], paint.finish, 'finish'));
-      if (paint.hex) rows.push(btn('Back to original colour', 'paint:0'));
+      const wheels = paint.target === 'Wheels', none = wheels ? '#b4b8bd' : '#515151';
+      rows.push(seg(['Body', 'Wheels'], paint.target, 'painttarget'),
+        `<div class="swatches">${paintList().map(([n, c], i) => `<button class="swatch ${c === paintCur() ? 'on' : ''}" style="background:${c || none}" data-act="paint:${i}" aria-label="${esc(n)}" title="${esc(n)}"></button>`).join('')}</div>`,
+        lv(wheels ? 'Wheel colour' : 'Body colour', esc(paintName())),
+        `<div class="row"><label class="lbl" for="carColor">Custom colour</label><input type="color" class="colorin" id="carColor" value="${paintCur() || none}"></div>`);
+      if (!wheels) rows.push(seg(['Metallic', 'Solid'], paint.finish, 'finish'));
+      if (paintCur()) rows.push(btn(wheels ? 'Back to silver alloys' : 'Back to original colour', 'paint:0'));
       break;
   }
   return sec(rows);
@@ -972,7 +986,8 @@ function act(a) {
     case 'immo': S.immo.tests[arg] = !S.immo.tests[arg]; break;
     case 'go': S.stack[S.tab].push(arg); break;
     case 'part': S.part = arg || null; break;
-    case 'paint': paint.hex = PAINTS[+arg][1]; carApplyPaint(); break;
+    case 'paint': paintSet(paintList()[+arg][1]); carApplyPaint(); break;
+    case 'painttarget': paint.target = arg; break;
     case 'finish': paint.finish = arg; carApplyPaint(); break;
     case 'togglepaint': S.part = S.part === 'paint' ? null : 'paint'; break;
     case 'tab': S.tab = arg; break;
@@ -1018,7 +1033,7 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'host') S.host = e.target.value;
   if (e.target.id === 'port') S.port = e.target.value;
   if (e.target.id === 'usbhost') { S.usbHost = e.target.value; saveDevices(); }
-  if (e.target.id === 'carColor') { paint.hex = e.target.value; carApplyPaint(); const c = e.target.closest('.sec'); if (c) c.querySelectorAll('.swatch.on').forEach(x => x.classList.remove('on')); }
+  if (e.target.id === 'carColor') { paintSet(e.target.value); carApplyPaint(); const c = e.target.closest('.sec'); if (c) c.querySelectorAll('.swatch.on').forEach(x => x.classList.remove('on')); }
 });
 
 // ---------- Deep links (#engine, #live, #heater …) ----------
@@ -1503,7 +1518,7 @@ const liveScreens = {
         + (LIVE.link ? (LIVE.devices.length ? ' Found: ' + LIVE.devices.join(', ') + '.' : ' The Pi reports no USB serial devices.') : '')
         + (S.devices.ABS === S.ecuPort ? " ABS shares the engine's K-line and cable: stop the engine connection before reading the ABS." : ''));
     body += sec([tog('Expert mode', S.expert, 'expert')], 'Expert');
-    return { title: 'Rover Diag', body };
+    return { title: 'Rover', body };
   },
   heater: () => {
     if (!LIVE.link) return needBridge('Webasto heater');
@@ -1616,7 +1631,7 @@ act = (a) => {
   }
   if (liveEngine()) {
     if (k === 'start') {
-      if (S.agentSource !== 'rover-mems-agent' && ['2J', '3'].includes(arg)) { S.alert = `${ECUS[arg]} is not handled by Rover Diag's own engine connection yet. Choose rover-mems-agent as the source.`; render(); return; }
+      if (S.agentSource !== 'rover-mems-agent' && ['2J', '3'].includes(arg)) { S.alert = `${ECUS[arg]} is not handled by Rover's own engine connection yet. Choose rover-mems-agent as the source.`; render(); return; }
       S.running = true; S.selectedECU = arg; S.outputs = {}; LIVE.status = null; agentPoll();
       (async () => {
         try { await agentGet('serialPort/' + encodeURIComponent(portName(S.ecuPort))); await agentGet('ecu/' + encodeURIComponent(arg)); S.agentLog.push(`Connecting to ${ECUS[arg]} on ${S.ecuPort}`); }
@@ -1650,10 +1665,10 @@ document.addEventListener('change', (e) => {
     if (!r.ok) return;
     LIVE.info = await r.json();
     LIVE.on = true;
-    S.agentSource = 'Rover Diag (Pi)'; S.running = false; S.selectedECU = null;
+    S.agentSource = 'Rover (Pi)'; S.running = false; S.selectedECU = null;
     if (S.adapterKind !== 'Simulator') S.adapterKind = 'This Pi';
     S.adapterConnected = false; S.heater.mode = null; S.traffic = []; S.agentLog = [];
-    document.title = 'Rover Diag – ' + LIVE.info.hostname;
+    document.title = 'Rover – ' + LIVE.info.hostname;
     render();
   } catch (e) {}
 })();
