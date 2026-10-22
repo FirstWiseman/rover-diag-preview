@@ -253,7 +253,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>
 // ---------- Simulated data (mirrors RoverCore's SimulatedMemsAgent / SimulatedCar) ----------
 const S = {
   tab: 'overview', stack: { overview: [], engine: [], heater: [], modules: [], more: [] },
-  expert: false, adapterKind: 'Simulator', adapterConnected: true,
+  expert: false, adapterKind: 'Wi-Fi', adapterConnected: true,
   agentSource: 'Simulator', host: 'raspberrypi.local', port: '8080',
   ecu: '1.9', running: true, selectedECU: '1.9', connectedAt: 0, faultsCleared: false, alert: null,
   outputs: {}, tick: 0, logTab: 'bridge',
@@ -364,21 +364,31 @@ const msgs = () => S.alert ? sec([`<div class="row"><span class="lbl" style="fon
 const USB_PORTS = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3'];
 const DEVICE_MODULES = [['Webasto', 'Webasto heater'], ['5AS', '5AS immobiliser'], ['ABS', 'Bosch ABS']];
 S.devices = { Webasto: '/dev/ttyUSB3', '5AS': '/dev/ttyUSB1', ABS: '/dev/ttyUSB0' };
-S.ecuPort = '/dev/ttyUSB0'; S.usbHost = S.host;
-try { const v = JSON.parse(localStorage.getItem('roverDiagDevices') || 'null'); if (v) { Object.assign(S.devices, v.devices || {}); S.ecuPort = v.ecuPort || S.ecuPort; S.usbHost = v.usbHost || S.usbHost; if (v.adapterKind) S.adapterKind = v.adapterKind; } } catch (e) {}
-function saveDevices() { try { localStorage.setItem('roverDiagDevices', JSON.stringify({ devices: S.devices, ecuPort: S.ecuPort, usbHost: S.usbHost, adapterKind: S.adapterKind })); } catch (e) {} }
+S.ecuPort = '/dev/ttyUSB0'; S.usbHost = S.host; S.bridgeDevice = 'Raspberry Pi';
+const BRIDGE_NAMES = { 'Raspberry Pi': 'RoverPi', 'ESP32': 'RoverBridge', 'Arduino Nano ESP32': 'RoverNano' };
+try { const v = JSON.parse(localStorage.getItem('roverDiagDevices') || 'null'); if (v) { Object.assign(S.devices, v.devices || {}); S.ecuPort = v.ecuPort || S.ecuPort; S.usbHost = v.usbHost || S.usbHost; if (v.adapterKind) S.adapterKind = v.adapterKind === 'USB cables' ? 'Wi-Fi' : v.adapterKind; if (BRIDGE_NAMES[v.bridgeDevice]) S.bridgeDevice = v.bridgeDevice; } } catch (e) {}
+function saveDevices() { try { localStorage.setItem('roverDiagDevices', JSON.stringify({ devices: S.devices, ecuPort: S.ecuPort, usbHost: S.usbHost, adapterKind: S.adapterKind, bridgeDevice: S.bridgeDevice })); } catch (e) {} }
 const devSelect = (l, change, cur) => `<div class="row"><span class="lbl">${esc(l)}</span><select class="select" data-change="${change}">${(USB_PORTS.includes(cur) ? USB_PORTS : USB_PORTS.concat([cur])).map(d => `<option ${d === cur ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`;
 
 // ---------- Screens ----------
 const screens = {
-  adapter: () => { const usb = S.adapterKind === 'USB cables'; return { title: 'Rover Diag', body:
-    sec([seg(['Simulator', 'USB cables', 'Bluetooth', 'Wi-Fi'], S.adapterKind, 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"'),
-      ...(usb ? [`<div class="row"><input class="input" id="usbhost" value="${esc(S.usbHost)}" aria-label="Agent computer IP"><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
-      S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${usb ? 'RoverUSBBridge 1.0' : 'Simulator (virtual 5AS, ABS and Webasto)'}</span>`) : lv('Not connected', '', ''),
+  adapter: () => {
+    const kind = S.adapterKind, dev = S.bridgeDevice, pi = dev === 'Raspberry Pi', sim = kind === 'Simulator';
+    const name = BRIDGE_NAMES[dev], cables = pi && !sim;
+    const info = sim ? 'Simulator (virtual 5AS, ABS and Webasto)' : pi ? 'RoverUSBBridge 1.0' + (kind === 'Bluetooth' ? ' via RoverPi' : '') : `RoverBridge 1.1 (${dev})`;
+    const foot = sim ? 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.'
+      : kind === 'Bluetooth' ? (pi ? 'Connects to the Pi\'s Bluetooth LE service "RoverPi" (installed by the rover-pi package), which passes everything to the USB bridge and its cables. The engine still uses the agent over Wi-Fi.'
+        : `Connects to the ${dev} bridge "${name}" over Bluetooth LE. See Firmware/rover-bridge.`)
+      : pi ? 'The USB bridge runs next to rover-mems-agent on the Raspberry Pi 3B (installed by the rover-pi package), with one USB cable per module. Uses the agent\'s address by default, port 35000.'
+        : `Join the bridge's Wi-Fi network "${name}" first (password rover400). Address 192.168.4.1, port 35000. See Firmware/rover-bridge.`;
+    return { title: 'Rover Diag', body:
+    sec([`<div class="row"><span class="lbl">Bridge device</span><select class="select" data-change="bridgeDevice" ${S.adapterConnected ? 'disabled' : ''}>${Object.keys(BRIDGE_NAMES).map(d => `<option ${d === dev ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`,
+      seg(['Wi-Fi', 'Bluetooth', 'Simulator'], kind, 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"'),
+      ...(kind === 'Wi-Fi' ? [`<div class="row"><input class="input" id="usbhost" value="${esc(pi ? S.usbHost : '192.168.4.1')}" aria-label="${pi ? 'Pi address' : 'Bridge IP'}" ${pi ? '' : 'disabled'}><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
+      S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${esc(info)}</span>`) : lv('Not connected', '', ''),
       S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn')],
-      'Rover Bridge (Webasto, 5AS, ABS)', usb ? 'The USB bridge runs next to rover-mems-agent on the Raspberry Pi 3B (installed by the rover-pi package), with one USB cable per module. Uses the agent\'s address by default, port 35000.'
-        : 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.')
-    + (usb ? sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])),
+      'Rover Bridge (Webasto, 5AS, ABS)', foot)
+    + (cables ? sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])),
       'USB cables', 'Which /dev/ttyUSBx each module uses. The engine ECU cable is chosen in the Engine tab (now ' + S.ecuPort + '). A change applies the next time a module connects.'
         + (S.adapterConnected ? ' Found: ' + USB_PORTS.filter(d => d !== '/dev/ttyUSB2').join(', ') + '.' : '')
         + (S.devices.ABS === S.ecuPort ? ' ABS shares the engine\'s K-line and cable: stop the engine connection before reading the ABS.' : '')) : '')
@@ -984,6 +994,7 @@ document.addEventListener('change', (e) => {
   if (c === 'agentSource') { S.agentSource = e.target.value; S.running = false; S.selectedECU = null; }
   if (c === 'ecu') S.ecu = e.target.value;
   if (c === 'ecuPort') { S.ecuPort = e.target.value; S.alert = 'Agent: Serial port set to ' + S.ecuPort.replace('/dev/', ''); saveDevices(); }
+  if (c === 'bridgeDevice') { S.bridgeDevice = e.target.value; saveDevices(); }
   if (c && c.startsWith('dev:')) { S.devices[c.slice(4)] = e.target.value; saveDevices(); }
   e.target.blur(); render();
 });
