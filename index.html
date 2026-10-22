@@ -360,21 +360,37 @@ const ttile = (t, v, u, cls = '') => `<div class="tile"><span class="t">${esc(t)
 const seg = (opts, cur, act) => `<div class="seg">${opts.map(o => `<button class="${o === cur ? 'on' : ''}" data-act="${act}:${o}">${esc(o)}</button>`).join('')}</div>`;
 const msgs = () => S.alert ? sec([`<div class="row"><span class="lbl" style="font-size:15px">ⓘ ${esc(S.alert)}</span><span class="val" data-act="dismiss" style="cursor:pointer">✕</span></div>`]) : '';
 
+// USB cable per module (AppModel.deviceModules), saved like the app's UserDefaults.
+const USB_PORTS = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3'];
+const DEVICE_MODULES = [['Webasto', 'Webasto heater'], ['5AS', '5AS immobiliser'], ['ABS', 'Bosch ABS']];
+S.devices = { Webasto: '/dev/ttyUSB3', '5AS': '/dev/ttyUSB1', ABS: '/dev/ttyUSB0' };
+S.ecuPort = '/dev/ttyUSB0'; S.usbHost = S.host;
+try { const v = JSON.parse(localStorage.getItem('roverDiagDevices') || 'null'); if (v) { Object.assign(S.devices, v.devices || {}); S.ecuPort = v.ecuPort || S.ecuPort; S.usbHost = v.usbHost || S.usbHost; if (v.adapterKind) S.adapterKind = v.adapterKind; } } catch (e) {}
+function saveDevices() { try { localStorage.setItem('roverDiagDevices', JSON.stringify({ devices: S.devices, ecuPort: S.ecuPort, usbHost: S.usbHost, adapterKind: S.adapterKind })); } catch (e) {} }
+const devSelect = (l, change, cur) => `<div class="row"><span class="lbl">${esc(l)}</span><select class="select" data-change="${change}">${(USB_PORTS.includes(cur) ? USB_PORTS : USB_PORTS.concat([cur])).map(d => `<option ${d === cur ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`;
+
 // ---------- Screens ----------
 const screens = {
-  adapter: () => ({ title: 'Rover Diag', body:
-    sec([seg(['Simulator', 'Bluetooth bridge', 'Wi-Fi bridge'], S.adapterKind, 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"'),
-      S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ Simulator (virtual 5AS, ABS and Webasto)</span>`) : lv('Not connected', '', ''),
+  adapter: () => { const usb = S.adapterKind === 'USB cables'; return { title: 'Rover Diag', body:
+    sec([seg(['Simulator', 'USB cables', 'Bluetooth', 'Wi-Fi'], S.adapterKind, 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"'),
+      ...(usb ? [`<div class="row"><input class="input" id="usbhost" value="${esc(S.usbHost)}" aria-label="Agent computer IP"><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
+      S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${usb ? 'RoverUSBBridge 1.0' : 'Simulator (virtual 5AS, ABS and Webasto)'}</span>`) : lv('Not connected', '', ''),
       S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn')],
-      'Rover Bridge (Webasto, 5AS, ABS)', 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.')
+      'Rover Bridge (Webasto, 5AS, ABS)', usb ? 'Runs Tools/rover-usb-bridge on the rover-mems-agent computer (Raspberry Pi or laptop), with one USB cable per module. Uses the agent\'s IP by default, port 35000.'
+        : 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.')
+    + (usb ? sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])),
+      'USB cables', 'Which /dev/ttyUSBx each module uses. The engine ECU cable is chosen in the Engine tab (now ' + S.ecuPort + '). A change applies the next time a module connects.'
+        + (S.adapterConnected ? ' Found: ' + USB_PORTS.filter(d => d !== '/dev/ttyUSB2').join(', ') + '.' : '')
+        + (S.devices.ABS === S.ecuPort ? ' ABS shares the engine\'s K-line and cable: stop the engine connection before reading the ABS.' : '')) : '')
     + sec([tog('Expert mode', S.expert, 'expert')], 'Expert', "Shows the agent's MEMS 2J research commands, 5AS EEPROM writing, undocumented 5AS tests, Webasto component tests and the raw W-Bus console.")
-    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)')], 'Your car') }),
+    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)')], 'Your car') }; },
 
   engine: () => {
     const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource"><option ${S.agentSource === 'rover-mems-agent' ? 'selected' : ''}>rover-mems-agent</option><option ${S.agentSource === 'Simulator' ? 'selected' : ''}>Simulator</option></select></div>`];
     if (S.agentSource !== 'Simulator') rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
-    if (S.running) { rows.push(lv('Agent', `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`)); rows.push(lv('Serial port', '/dev/ttyUSB0')); }
-    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data.' : 'Run rover-mems-agent on a laptop or Raspberry Pi with the diagnostic cable, on the same Wi-Fi as this phone. It listens on port 8080.');
+    if (S.running) rows.push(lv('Agent', `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
+    rows.push(devSelect('ECU cable', 'ecuPort', S.ecuPort));
+    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : 'Run rover-mems-agent on a laptop or Raspberry Pi with the diagnostic cable, on the same Wi-Fi as this phone. It listens on port 8080. With several USB cables, start it from /dev (Tools/rover-usb-bridge/start.sh does this); the app then selects the ECU cable (now ' + S.ecuPort + ').');
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
     if (S.running && S.selectedECU === S.ecu) {
       ecuRows.push(ecuConnected() ? lv(`✓ Connected to ${ECUS[S.selectedECU]}`, '', 'ok') : `<div class="row"><div class="spinner"></div><span class="lbl">Waiting for the ECU to answer…</span></div>`);
@@ -911,7 +927,7 @@ function act(a) {
   const [k, arg] = a.split(/:(.*)/s);
   switch (k) {
     case 'back': S.stack[S.tab].pop(); break;
-    case 'adapterKind': S.adapterKind = arg; break;
+    case 'adapterKind': S.adapterKind = arg; saveDevices(); break;
     case 'adapterOn': S.adapterConnected = true; break;
     case 'adapterOff': S.adapterConnected = false; break;
     case 'expert': S.expert = !S.expert; break;
@@ -967,12 +983,15 @@ document.addEventListener('change', (e) => {
   const c = e.target.dataset.change;
   if (c === 'agentSource') { S.agentSource = e.target.value; S.running = false; S.selectedECU = null; }
   if (c === 'ecu') S.ecu = e.target.value;
+  if (c === 'ecuPort') { S.ecuPort = e.target.value; S.alert = 'Agent: Serial port set to ' + S.ecuPort.replace('/dev/', ''); saveDevices(); }
+  if (c && c.startsWith('dev:')) { S.devices[c.slice(4)] = e.target.value; saveDevices(); }
   e.target.blur(); render();
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'minutes') { S.heater.minutes = +e.target.value; e.target.closest('.row').querySelector('.val').textContent = `${S.heater.minutes} min`; }
   if (e.target.id === 'host') S.host = e.target.value;
   if (e.target.id === 'port') S.port = e.target.value;
+  if (e.target.id === 'usbhost') { S.usbHost = e.target.value; saveDevices(); }
   if (e.target.id === 'carColor') { paint.hex = e.target.value; carApplyPaint(); const c = e.target.closest('.sec'); if (c) c.querySelectorAll('.swatch.on').forEach(x => x.classList.remove('on')); }
 });
 
