@@ -340,9 +340,9 @@ setInterval(() => {
   S.tick += 1;
   const h = S.heater;
   h.temp = h.mode ? Math.min(75, h.temp + 0.6) : Math.max(8, h.temp - 0.2);
-  if (S.running && ecuConnected() && S.tick % 4 === 0) S.agentLog.push(`Got data ${S.tick % 8 === 0 ? '7D' : '80'}`);
+  if (!LIVE.on && S.running && ecuConnected() && S.tick % 4 === 0) S.agentLog.push(`Got data ${S.tick % 8 === 0 ? '7D' : '80'}`);
   if (S.agentLog.length > 200) S.agentLog.shift();
-  if (S.adapterConnected && h.connected && h.monitoring && S.tick % 8 === 0) {
+  if (!LIVE.on && S.adapterConnected && h.connected && h.monitoring && S.tick % 8 === 0) {
     S.traffic.push(['TX', 'F4 03 50 05 A2', '']); S.traffic.push(['RX', '4F 0B D0 05 3A 30 70 01 13 88 04 B0 9C', '']);
     if (S.traffic.length > 200) S.traffic.splice(0, 2);
   }
@@ -368,7 +368,7 @@ S.ecuPort = '/dev/ttyUSB0'; S.usbHost = S.host; S.bridgeDevice = 'Raspberry Pi';
 const BRIDGE_NAMES = { 'Raspberry Pi': 'RoverPi', 'ESP32': 'RoverBridge', 'Arduino Nano ESP32': 'RoverNano' };
 try { const v = JSON.parse(localStorage.getItem('roverDiagDevices') || 'null'); if (v) { Object.assign(S.devices, v.devices || {}); S.ecuPort = v.ecuPort || S.ecuPort; S.usbHost = v.usbHost || S.usbHost; if (v.adapterKind) S.adapterKind = v.adapterKind === 'USB cables' ? 'Wi-Fi' : v.adapterKind; if (BRIDGE_NAMES[v.bridgeDevice]) S.bridgeDevice = v.bridgeDevice; } } catch (e) {}
 function saveDevices() { try { localStorage.setItem('roverDiagDevices', JSON.stringify({ devices: S.devices, ecuPort: S.ecuPort, usbHost: S.usbHost, adapterKind: S.adapterKind, bridgeDevice: S.bridgeDevice })); } catch (e) {} }
-const devSelect = (l, change, cur) => `<div class="row"><span class="lbl">${esc(l)}</span><select class="select" data-change="${change}">${(USB_PORTS.includes(cur) ? USB_PORTS : USB_PORTS.concat([cur])).map(d => `<option ${d === cur ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`;
+const devSelect = (l, change, cur) => `<div class="row"><span class="lbl">${esc(l)}</span><select class="select" data-change="${change}">${[...new Set(USB_PORTS.concat(LIVE.devices, [cur]))].map(d => `<option ${d === cur ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`;
 
 // ---------- Screens ----------
 const screens = {
@@ -397,10 +397,10 @@ const screens = {
 
   engine: () => {
     const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource"><option ${S.agentSource === 'rover-mems-agent' ? 'selected' : ''}>rover-mems-agent</option><option ${S.agentSource === 'Simulator' ? 'selected' : ''}>Simulator</option></select></div>`];
-    if (S.agentSource !== 'Simulator') rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
-    if (S.running) rows.push(lv('Agent', `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
+    if (S.agentSource !== 'Simulator' && !LIVE.on) rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
+    if (S.running) rows.push(lv('Agent', liveEngine() ? (LIVE.status ? `<span style="color:var(--green)">✓ v${esc(LIVE.status.agentVersion || '?')}</span>` : 'Waiting…') : `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
     rows.push(devSelect('ECU cable', 'ecuPort', S.ecuPort));
-    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : 'rover-mems-agent runs on the Raspberry Pi 3B (the rover-pi package installs it as a service), on the same Wi-Fi as this phone or the phone\'s hotspot. Address raspberrypi.local or the Pi\'s IP, port 8080. With several USB cables the app selects the ECU cable (now ' + S.ecuPort + ').');
+    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : (LIVE.on ? 'rover-mems-agent on ' + LIVE.info.hostname + ', reached through this page. Ignition on, then Connect.' : 'rover-mems-agent runs on the Raspberry Pi 3B (the rover-pi package installs it as a service), on the same Wi-Fi as this phone or the phone\'s hotspot. Address raspberrypi.local or the Pi\'s IP, port 8080. With several USB cables the app selects the ECU cable (now ' + S.ecuPort + ').'));
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
     if (S.running && S.selectedECU === S.ecu) {
       ecuRows.push(ecuConnected() ? lv(`✓ Connected to ${ECUS[S.selectedECU]}`, '', 'ok') : `<div class="row"><div class="spinner"></div><span class="lbl">Waiting for the ECU to answer…</span></div>`);
@@ -524,10 +524,10 @@ const HEATER_VALUES = {
   'Coolant temperature': s => [s.temp, '°C'], 'Supply voltage': s => [s.volt.toFixed(2), 'V'], 'Heating power': s => [s.power, 'W'],
   'Flame detected': s => [s.flame ? 'On' : 'Off', ''], 'Combustion air fan power': s => [s.fanPct, '%'],
   'Fuel pump frequency': s => [s.pumpHz.toFixed(2), 'Hz'], 'Circulation pump power': s => [s.circPct, '%'],
-  'Working hours': () => ['300 h 18 min', ''], 'Start counter': () => [833, ''],
+  'Working hours': s => [s.work || '300 h 18 min', ''], 'Start counter': s => [s.starts ?? 833, ''],
 };
 const engineLive = () => S.running && ecuConnected() && S.selectedECU && S.selectedECU !== 'rc5';
-const heaterLive = () => S.adapterConnected && S.heater.connected;
+const heaterLive = () => liveBridge() ? !!LIVE.heater : S.adapterConnected && S.heater.connected;
 function ovName(id) {
   if (id.startsWith('engine.')) { const k = id.slice(7); return FIELD[k] ? FIELD[k][1] : k; }
   const n = id.slice(7);
@@ -1012,14 +1012,605 @@ const ROUTES = { overview: ['overview'], ovedit: ['overview', 'ovedit'], more: [
 function route(name) {
   const r = ROUTES[name]; if (!r) return;
   S.tab = r[0]; S.stack[S.tab] = r.slice(1);
-  if (name === 'srs' && S.selectedECU !== 'rc5') { S.running = true; S.selectedECU = 'rc5'; S.connectedAt = now() - 5000; }
-  if (name === 'heater' || name === 'hstatus') { S.heater.mode = 'Parking heater'; S.heater.temp = 46; }
+  if (!LIVE.on && name === 'srs' && S.selectedECU !== 'rc5') { S.running = true; S.selectedECU = 'rc5'; S.connectedAt = now() - 5000; }
+  if (!LIVE.on && (name === 'heater' || name === 'hstatus')) { S.heater.mode = 'Parking heater'; S.heater.temp = 46; }
   if (name === 'console') S.logTab = 'bridge';
   render();
 }
 $('#jump').innerHTML = [['overview', 'Overview'], ['ovedit', 'Edit Overview'], ['engine', 'Dashboard'], ['live', 'Live values'], ['tests', 'Actuator tests'], ['heater', 'Webasto'], ['herrors', 'Heater faults'], ['immo', '5AS'], ['srs', 'Airbag'], ['console', 'Console']]
   .map(([k, l]) => `<button data-route="${k}">${l}</button>`).join('');
 $('#jump').addEventListener('click', (e) => { const b = e.target.closest('[data-route]'); if (b) route(b.dataset.route); });
+
+// ---------- Live mode: served by the Raspberry Pi (Tools/rover-usb-bridge/rover_web.py) ----------
+// The same page is the GitHub preview (simulated) and the Pi's web app. When /rover/info answers,
+// the engine comes from rover-mems-agent through /agent/… and the Webasto, 5AS and ABS go through
+// the /bridge WebSocket to the Rover USB Bridge. The protocol code below mirrors RoverCore
+// (BridgeSerialLink, DiagLine, WebastoHeater, Immobiliser5AS, BoschABS53).
+const LIVE = { on: false, info: null, status: null, poll: null, link: null, owner: null, busy: '', devices: [],
+  heater: null, immo: null, abs: null };
+const liveEngine = () => LIVE.on && S.agentSource !== 'Simulator';
+const liveBridge = () => LIVE.on && S.adapterKind !== 'Simulator';
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, '0');
+const hexs = (a) => Array.from(a, hex2).join(' ');
+const ascii = (a) => Array.from(a, b => b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.').join('');
+const portName = (p) => p.startsWith('/dev/') ? p.slice(5) : p;
+function traffic(dir, bytes, note) { S.traffic.push([dir, bytes ? hexs(bytes) : '', note || '']); if (S.traffic.length > 400) S.traffic.splice(0, S.traffic.length - 400); }
+class DiagError extends Error {}
+
+// --- Engine via rover-mems-agent ---
+async function agentGet(path) {
+  const r = await fetch('/agent/' + path, { cache: 'no-store' });
+  const t = await r.text();
+  if (!r.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch (e) {} throw new Error(m); }
+  return t;
+}
+function agentPoll() {
+  if (LIVE.poll) return;
+  let failures = 0;
+  LIVE.poll = setInterval(async () => {
+    if (!S.running || !liveEngine()) return;
+    try {
+      const s = JSON.parse(await agentGet('api'));
+      LIVE.status = s; failures = 0;
+      if (s.alert) { S.alert = s.alert; S.agentLog.push(s.alert); }
+      if (s.error) { S.alert = 'Agent: ' + s.error; S.agentLog.push('Error: ' + s.error); }
+      if (S.agentLog.length > 300) S.agentLog.splice(0, 100);
+    } catch (e) { if (++failures === 3) S.alert = 'Lost the agent: ' + e.message; }
+  }, 250);
+}
+async function agentCommand(name) {
+  try { await agentGet('command/' + encodeURIComponent(name)); S.agentLog.push('< ' + name); }
+  catch (e) { S.alert = `Command ${name} failed: ${e.message}`; }
+  render();
+}
+const agentFaultName = (f) => { if (!f.startsWith('fault_')) return f; const w = f.slice(6).split('_').join(' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+
+// --- Bridge link over the WebSocket (BridgeSerialLink) ---
+const CMD = { config: 1, tx: 2, brk: 3, fiveBaud: 4, ping: 5, flush: 6, kwMode: 7, kwBlock: 8, devices: 9 };
+function frame(type, payload = []) {
+  const body = [type, payload.length & 0xff, payload.length >> 8, ...payload];
+  return new Uint8Array([0xA5, ...body, body.reduce((x, b) => x ^ b, 0)]);
+}
+class BridgeLink {
+  constructor() { this.buf = []; this.rx = []; this.kw = []; this.acks = []; this.waiters = new Set(); this.pong = null; this.devices = null; this.log = null; this.config = null; }
+  open() {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/bridge');
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { this.ws = ws; resolve(); };
+      ws.onerror = () => reject(new DiagError('Cannot reach the Rover USB Bridge on the Pi'));
+      ws.onclose = () => { this.ws = null; this.wake(); if (LIVE.link === this) liveBridgeLost(); };
+      ws.onmessage = (e) => this.ingest(new Uint8Array(e.data));
+    });
+  }
+  close() { if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; } }
+  ingest(bytes) {
+    this.buf.push(...bytes);
+    for (;;) {
+      const s = this.buf.indexOf(0xA5);
+      if (s < 0) { this.buf = []; break; }
+      if (s > 0) this.buf.splice(0, s);
+      if (this.buf.length < 5) break;
+      const n = this.buf[2] | this.buf[3] << 8;
+      if (this.buf.length < 5 + n) break;
+      const body = this.buf.slice(1, 4 + n);
+      if (body.reduce((x, b) => x ^ b, 0) !== this.buf[4 + n]) { this.buf.shift(); continue; }
+      this.buf.splice(0, 5 + n);
+      const [type, p] = [body[0], body.slice(3)];
+      if (type === 0x81) this.rx.push(...p);
+      else if (type === 0x87) this.kw.push(p);
+      else if (type === 0x8E && p.length >= 2) this.acks.push(p);
+      else if (type === 0x85) this.pong = String.fromCharCode(...p);
+      else if (type === 0x89) this.devices = String.fromCharCode(...p).split('\n').filter(Boolean);
+      else if (type === 0x8F) this.log = new TextDecoder().decode(new Uint8Array(p));
+    }
+    this.wake();
+  }
+  wake() { for (const w of [...this.waiters]) w(); }
+  // Resolves with check()'s value once it is not undefined, or undefined after ms.
+  waitFor(check, ms) {
+    return new Promise((resolve) => {
+      const done = (v) => { this.waiters.delete(tick); clearTimeout(timer); resolve(v); };
+      const tick = () => { const v = check(); if (v !== undefined) done(v); else if (!this.ws) done(undefined); };
+      const timer = setTimeout(() => done(undefined), ms);
+      this.waiters.add(tick); tick();
+    });
+  }
+  send(type, payload) { if (!this.ws) throw new DiagError('Not connected to the bridge'); this.ws.send(frame(type, payload)); }
+  async command(type, payload = [], ms = 2000) {
+    this.log = null;
+    this.send(type, payload);
+    const status = await this.waitFor(() => { const i = this.acks.findIndex(a => a[0] === type); return i < 0 ? undefined : this.acks.splice(i, 1)[0][1]; }, ms);
+    if (status === undefined) throw new DiagError(`Bridge did not acknowledge command ${type}`);
+    if (status === 2) throw new DiagError('No answer to 5-baud init – check ignition and wiring');
+    if (status === 3) throw new DiagError('Module did not acknowledge KW1281 block');
+    if (status === 4) throw new DiagError(this.log || 'The bridge could not open the serial device');
+    if (status !== 0) throw new DiagError(this.log || `Bridge command ${type} failed, status ${status}`);
+  }
+  async ping() { this.pong = null; this.send(CMD.ping, []); const p = await this.waitFor(() => this.pong || undefined, 2000); if (!p) throw new DiagError('Bridge did not answer ping'); return p; }
+  async listDevices() { this.devices = null; this.send(CMD.devices, []); return (await this.waitFor(() => this.devices || undefined, 1000)) || []; }
+  async configure(c) {
+    const key = JSON.stringify(c);
+    if (this.config === key) return;
+    const p = [c.baud & 0xff, c.baud >> 8 & 0xff, c.baud >> 16 & 0xff, c.baud >>> 24, c.parity, 1, c.port, c.flags,
+      ...new TextEncoder().encode(c.device || '')];
+    await this.command(CMD.config, p);
+    this.config = key;
+  }
+  async write(bytes, baud) { await this.command(CMD.tx, bytes, 2000 + bytes.length * 11000 / baud); }
+  async read(count, ms) {
+    await this.waitFor(() => this.rx.length >= count ? true : undefined, ms);
+    return this.rx.splice(0, Math.min(count, this.rx.length));
+  }
+  async flush() { await this.command(CMD.flush); this.rx = []; this.kw = []; }
+  async kwReceive(ms) { return (await this.waitFor(() => this.kw.length ? this.kw.shift() : undefined, ms)) || null; }
+}
+
+// --- DiagLine: line settings, K-line echo removal, traffic log ---
+const LINES = {
+  Webasto: { baud: 2400, parity: 1, port: 0, flags: 0, echo: true },
+  '5AS': { baud: 9600, parity: 0, port: 2, flags: 3, echo: false },
+  ABS: { baud: 9600, parity: 0, port: 0, flags: 0, echo: true },
+};
+const line = {
+  cfg: LINES.Webasto,
+  async configure(module) {
+    this.cfg = LINES[module];
+    const device = S.devices[module];
+    traffic('--', null, `Line ${this.cfg.baud} baud, parity ${['none', 'even', 'odd'][this.cfg.parity]}, ${device}`);
+    await LIVE.link.configure({ ...this.cfg, echo: undefined, device });
+  },
+  async send(bytes, note) {
+    traffic('TX', bytes, note);
+    await LIVE.link.write(bytes, this.cfg.baud);
+    if (this.cfg.echo) {
+      const echo = await LIVE.link.read(bytes.length, bytes.length * 11000 / this.cfg.baud + 250);
+      if (hexs(echo) !== hexs(bytes)) throw new DiagError(`K-line echo mismatch, sent ${hexs(bytes)} got ${hexs(echo)}`);
+    }
+  },
+  async receive(count, ms) { const b = await LIVE.link.read(count, ms); if (b.length) traffic('RX', b); return b; },
+  async exactly(count, ms, what) {
+    const b = await this.receive(count, ms);
+    if (b.length !== count) throw new DiagError(`Timeout: ${what} (got ${b.length} of ${count} bytes: ${hexs(b)})`);
+    return b;
+  },
+  async untilIdle(gap = 120, first = 600, maxTime = 3000) {
+    const out = [], start = performance.now();
+    let wait = first;
+    while (performance.now() - start < maxTime) {
+      const c = await LIVE.link.read(64, wait);
+      if (!c.length) break;
+      out.push(...c); wait = gap;
+    }
+    if (out.length) traffic('RX', out);
+    return out;
+  },
+  async brk(low, high) { traffic('--', null, `Break ${low} ms low / ${high} ms high`); await LIVE.link.command(CMD.brk, [low & 0xff, low >> 8, high & 0xff, high >> 8], 2000 + low + high); },
+  async slowInit(address, invertKW2 = true, expectInvertedAddress = true) {
+    await LIVE.link.flush();
+    traffic('--', null, `5-baud init, address ${hex2(address)}`);
+    await LIVE.link.command(CMD.fiveBaud, [address, invertKW2 ? 1 : 0], 6000);
+    const sync = await this.exactly(1, 1500, '5-baud sync byte');
+    if (sync[0] !== 0x55) throw new DiagError(`Sync ${hex2(sync[0])}, expected 55`);
+    const kw = await this.exactly(2, 800, 'key bytes');
+    if (invertKW2) {
+      if (this.cfg.echo) await this.receive(1, 300);
+      if (expectInvertedAddress) await this.receive(1, 150);
+    }
+    traffic('--', null, `Key bytes ${hexs(kw)}`);
+    return kw;
+  },
+};
+
+// One module owns the line at a time, and one operation runs at a time.
+let chain = Promise.resolve();
+function exclusive(what, fn) {
+  const run = async () => {
+    LIVE.busy = what; render();
+    try { return await fn(); }
+    catch (e) { S.alert = e.message; traffic('--', null, 'Error: ' + e.message); }
+    finally { LIVE.busy = ''; render(); }
+  };
+  const p = chain.then(run, run);
+  chain = p.catch(() => {});
+  return p;
+}
+async function claim(module) {
+  if (!LIVE.link) throw new DiagError('Connect the bridge first (More → Adapter)');
+  if (LIVE.owner && LIVE.owner !== module) await releaseOwner();
+  LIVE.owner = module;
+}
+async function releaseOwner() {
+  const o = LIVE.owner;
+  LIVE.owner = null;
+  if (o === 'Webasto') heaterStopMonitor();
+  if (o === '5AS' && LIVE.immo) { try { await immoCommand(0xF6); } catch (e) {} LIVE.immo = null; }
+  if (o === 'ABS' && LIVE.abs) { try { await absSend(0x06); await LIVE.link.command(CMD.kwMode, [0]); } catch (e) {} LIVE.abs = null; }
+  if (o === 'Webasto') LIVE.heater = null;
+}
+function liveBridgeLost() {
+  LIVE.link = null; LIVE.owner = null; LIVE.heater = null; LIVE.immo = null; LIVE.abs = null; heaterStopMonitor();
+  S.adapterConnected = false; S.alert = 'Lost the connection to the bridge'; render();
+}
+async function bridgeConnect() {
+  await exclusive('Connecting to the bridge…', async () => {
+    const link = new BridgeLink();
+    await link.open();
+    const info = await link.ping();
+    LIVE.link = link; LIVE.info.bridge = info;
+    LIVE.devices = await link.listDevices();
+    S.adapterConnected = true;
+  });
+}
+async function bridgeDisconnect() {
+  await exclusive('Disconnecting…', async () => { await releaseOwner(); if (LIVE.link) LIVE.link.close(); LIVE.link = null; S.adapterConnected = false; });
+}
+
+// --- Webasto W-Bus (WebastoHeater) ---
+const WBUS_IDENT = [[0x01, 'Device ID'], [0x02, 'Hardware version'], [0x03, 'Data set ID'], [0x04, 'Control unit manufactured'],
+  [0x05, 'Heater manufactured'], [0x07, 'Customer / part number'], [0x09, 'Serial number'], [0x0A, 'W-Bus version'], [0x0B, 'Device name'], [0x0C, 'W-Bus feature code']];
+const WBUS_ERR_ALL = {
+  0x01: 'Control unit defective', 0x02: 'No start', 0x03: 'Flame failure', 0x04: 'Supply voltage too high', 0x05: 'Flame detected prior to combustion',
+  0x06: 'Heating unit overheated', 0x07: 'Heating unit interlocked', 0x08: 'Metering pump short circuit', 0x09: 'Combustion air fan short circuit',
+  0x0A: 'Glow plug / flame monitor short circuit', 0x0B: 'Circulation pump short circuit', 0x0C: 'No communication to air condition',
+  0x0D: 'Green LED short circuit', 0x0E: 'Yellow LED short circuit', 0x0F: 'No configuration signal', 0x10: 'Solenoid valve short circuit',
+  0x11: 'ECU wrongly coded', 0x12: 'W-Bus communication failure', 0x13: 'Vehicle fan relay short circuit', 0x14: 'Temperature sensor short circuit',
+  0x15: 'Combustion air fan blocked', 0x16: 'Battery main switch short circuit', 0x17: 'Invalid air flow reduction',
+  0x18: 'Communication failure on customer specific bus', 0x19: 'Glow plug / electronic ignition short circuit', 0x1A: 'Flame sensor short circuit',
+  0x1B: 'Overheat short circuit', 0x1D: 'Solenoid valve shed test short circuit', 0x1E: 'Fuel sensor short circuit',
+  0x1F: 'Nozzle stock heating short circuit', 0x20: 'Operation indicator short circuit', 0x21: 'Flame indicator short circuit',
+  0x22: 'Reference resistance wrong', 0x23: 'Crash interlock activated', 0x24: 'Car is almost out of fuel', 0x25: 'Fuel pre heating short circuit',
+  0x26: 'PCB temperature sensor short circuit', 0x27: 'Ground contact to the ECU broken', 0x28: 'Board net energy manager low power voltage',
+  0x29: 'Fuel priming still not done', 0x2A: 'Error in the radio telegram', 0x2B: 'Telestart still not programmed', 0x2C: 'Pressure sensor short circuit',
+  0x81: 'EOL checksum error', 0x82: 'No start during test-run', 0x83: 'Flame failure (test run)', 0x84: 'Operating voltage too low',
+  0x85: 'Flame was detected after combustion', 0x87: 'Heater lock-out permanent', 0x88: 'Metering pump interruption', 0x89: 'Combustion air fan interruption',
+  0x8A: 'Glow plug / flame monitor interruption', 0x8B: 'Circulation pump interruption', 0x8D: 'Green LED interruption', 0x8E: 'Yellow LED interruption',
+  0x90: 'Solenoid valve interruption', 0x93: 'Vehicle fan relay interruption', 0x94: 'Temperature sensor interruption', 0x95: 'Combustion air fan tight',
+  0x97: 'Overheat sensor position wrong', 0x99: 'Glow plug / electronic ignition unit interruption', 0x9A: 'Flame sensor interruption',
+  0x9B: 'Setpoint transmitter invalid', 0x9D: 'Solenoid valve shed test interruption', 0x9E: 'Fuel sensor interruption', 0x9F: 'Nozzle stock heating interruption',
+  0xA0: 'Operating indicator interruption', 0xA1: 'Flame indicator interruption', 0xA5: 'Fuel pre heating interruption', 0xA6: 'PCB temperature sensor interruption',
+  0xAA: 'Send on W-Bus not succeeded', 0xAB: 'Overheat sensor interruption', 0xAC: 'Pressure sensor failure',
+};
+const HEAT_MODES = { 'Parking heater': 0x21, Ventilation: 0x22, 'Supplemental heater': 0x23, 'Circulation pump': 0x24, Boost: 0x25 };
+function wbusFrame(cmd, data) { const f = [0xF4, data.length + 2, cmd, ...data]; f.push(f.reduce((x, b) => x ^ b, 0)); return f; }
+async function wbusExchange(cmd, data, ms) {
+  await line.send(wbusFrame(cmd, data));
+  const deadline = performance.now() + ms;
+  let header = 0;
+  while (header !== 0x4F) {
+    if (performance.now() > deadline) throw new DiagError(`Timeout: W-Bus reply to ${hex2(cmd)}`);
+    header = (await line.exactly(1, ms, 'W-Bus header'))[0];
+  }
+  const len = (await line.exactly(1, 200, 'W-Bus length'))[0];
+  if (len < 2) throw new DiagError(`Unexpected W-Bus length ${len}`);
+  const body = await line.exactly(len, 100 + len * 11000 / 2400, 'W-Bus body');
+  const all = [0x4F, len, ...body];
+  if (all.slice(0, -1).reduce((x, b) => x ^ b, 0) !== all[all.length - 1]) throw new DiagError('Checksum error');
+  const payload = body.slice(1, -1);
+  if (body[0] === 0x7F) { const e = new DiagError(`Negative response to ${hex2(payload[0] ?? cmd)}, code ${hex2(payload[1] ?? 0)}`); e.negative = true; throw e; }
+  if (body[0] !== (cmd | 0x80)) throw new DiagError(`Unexpected W-Bus reply ${hexs(all)}`);
+  return payload;
+}
+async function wbus(cmd, data = [], ms = 1000) {
+  const h = LIVE.heater;
+  // The bus sleeps after a few seconds of silence; wake it with a 50 ms break.
+  if (performance.now() - h.lastActivity > 3000) await line.brk(50, 50);
+  try {
+    for (let attempt = 1; ; attempt++) {
+      try { return await wbusExchange(cmd, data, ms); }
+      catch (e) { if (attempt >= 3 || e.negative) throw e; await LIVE.link.flush(); await sleep(100); }
+    }
+  } finally { h.lastActivity = performance.now(); }
+}
+async function wbusPage(cmd, idx) { const r = await wbus(cmd, [idx]); return r[0] === idx ? r.slice(1) : r; }
+async function heaterReadStatus() {
+  const st = {};
+  for (const [k, p] of [['flags', 2], ['act', 3], ['meas', 5], ['cnt', 6], ['state', 7], ['sub', 0x0F]]) {
+    try { st[k] = await wbusPage(0x50, p); } catch (e) { if (e.message.startsWith('K-line')) throw e; }
+  }
+  if (!st.flags && !st.meas && !st.act) throw new DiagError('Heater did not answer status requests');
+  LIVE.heater.status = st;
+}
+async function heaterReadErrors() {
+  const r = await wbus(0x56, [0x01]), out = [];
+  for (let i = 2; i + 1 < r.length; i += 2) out.push([r[i], r[i + 1]]);
+  LIVE.heater.errors = out;
+}
+function heaterConnect() {
+  return exclusive('Connecting to heater…', async () => {
+    await claim('Webasto');
+    LIVE.heater = { lastActivity: -1e9, ident: [], status: null, errors: [], mode: null };
+    try {
+      await line.configure('Webasto');
+      await LIVE.link.flush();
+      for (const [id, name] of WBUS_IDENT) {
+        try { LIVE.heater.ident.push([id, name, await wbusPage(0x51, id)]); } catch (e) { if (e.message.startsWith('K-line')) throw e; }
+      }
+      if (!LIVE.heater.ident.length) throw new DiagError('Timeout: heater did not answer identification');
+      await heaterReadStatus();
+    } catch (e) { LIVE.heater = null; LIVE.owner = null; throw e; }
+    try { await heaterReadErrors(); } catch (e) {}
+    heaterStartMonitor();
+  });
+}
+function heaterStartMonitor() {
+  heaterStopMonitor();
+  let lastKeepAlive = performance.now();
+  LIVE.heaterTimer = setInterval(() => {
+    if (!LIVE.heater || LIVE.busy) return;
+    exclusive('', async () => {
+      if (!LIVE.heater) return;
+      await heaterReadStatus();
+      if (LIVE.heater.mode && performance.now() - lastKeepAlive > 10000) {
+        await wbus(0x44, [HEAT_MODES[LIVE.heater.mode], 0]);
+        lastKeepAlive = performance.now();
+      }
+    });
+  }, 2000);
+}
+function heaterStopMonitor() { clearInterval(LIVE.heaterTimer); LIVE.heaterTimer = null; }
+const heaterOp = (what, fn) => LIVE.heater ? exclusive(what, fn) : (S.alert = 'Connect the heater in the Webasto tab first', render());
+const wIdent = (id, d) => (id === 0x07 || id === 0x0B) ? ascii(d).trim() : ((id === 0x04 || id === 0x05) && d.length >= 3) ? `${String(d[0]).padStart(2, '0')}.${String(d[1]).padStart(2, '0')}.${(d[2] < 50 ? 2000 : 1900) + d[2]}` : (id === 0x0A && d.length) ? `${d[0] >> 4}.${d[0] & 15}` : hexs(d);
+function liveHeaterStatus() {
+  const st = (LIVE.heater && LIVE.heater.status) || {}, by = (p, i) => p && i < p.length ? p[i] : undefined;
+  const wd = (p, i) => by(p, i) !== undefined && by(p, i + 1) !== undefined ? p[i] << 8 | p[i + 1] : undefined;
+  const bit = (p, i, m) => by(p, i) === undefined ? undefined : !!(p[i] & m);
+  const t = by(st.meas, 0), v = wd(st.meas, 1), r = wd(st.meas, 6);
+  return { temp: t === undefined ? '–' : t - 50, volt: v === undefined ? NaN : v / 1000, power: wd(st.meas, 4) ?? '–', flame: !!by(st.meas, 3), res: r === undefined ? NaN : r / 1000,
+    fan: bit(st.act, 0, 1), glow: bit(st.act, 0, 2), pump: bit(st.act, 0, 4), circ: bit(st.act, 0, 8), fanRelay: bit(st.act, 0, 0x10),
+    fanPct: by(st.sub, 2) === undefined ? '–' : by(st.sub, 2) / 2, pumpHz: by(st.sub, 1) === undefined ? NaN : by(st.sub, 1) / 20,
+    circPct: by(st.sub, 4) === undefined ? '–' : by(st.sub, 4) / 2, glowPct: by(st.sub, 0) === undefined ? '–' : by(st.sub, 0) / 2,
+    work: wd(st.cnt, 0) === undefined ? '–' : `${wd(st.cnt, 0)} h ${by(st.cnt, 2)} min`, oper: wd(st.cnt, 3) === undefined ? '–' : `${wd(st.cnt, 3)} h ${by(st.cnt, 5)} min`,
+    starts: wd(st.cnt, 6) ?? '–', state: by(st.state, 0) === undefined ? '–' : '0x' + hex2(st.state[0]),
+    mainSwitch: bit(st.flags, 0, 1), summer: bit(st.flags, 1, 1), dplus: bit(st.flags, 2, 0x10), t15: bit(st.flags, 4, 1), boost: bit(st.flags, 3, 0x10) };
+}
+
+// --- 5AS immobiliser (Immobiliser5AS, normal mode) ---
+async function immoCommand(cmd) {
+  await line.send([cmd]);
+  const r = await line.untilIdle(80, 600);
+  return r[0] === cmd ? r.slice(1) : r;
+}
+function immoConnect() {
+  return exclusive('Connecting to 5AS…', async () => {
+    await claim('5AS');
+    let kw;
+    try { await line.configure('5AS'); kw = await line.slowInit(0x1C); } catch (e) { LIVE.owner = null; throw e; }
+    // The module says nothing more until asked; drop any stray init bytes so the first reply lines up.
+    await sleep(100); await LIVE.link.flush();
+    LIVE.immo = { kw, data: null, tests: {} };
+    await immoRead();
+  });
+}
+async function immoRead() {
+  await line.send([0x83]);
+  let r = await line.untilIdle(80, 600);
+  if (r[0] === 0x83) r = r.slice(1);
+  if (!r.length || r.length < r[0]) throw new DiagError(`Unexpected 5AS data packet ${hexs(r)}`);
+  LIVE.immo.data = r.slice(0, r[0]);
+}
+const immoOp = (what, fn) => LIVE.immo ? exclusive(what, fn) : (S.alert = 'Connect the 5AS in Modules → 5AS first', render());
+function immoRows() {
+  const p = LIVE.immo.data || [], b7 = (i) => i < p.length ? (p[i] & 0x80 ? 'Active' : 'Inactive') : '–';
+  const serial = p.length > 22 ? (p[20] | p[21] << 8 | p[22] << 16).toString(16).toUpperCase().padStart(6, '0') : '–';
+  const rows = [lv('Unit', esc(p.length > 35 ? ascii(p.slice(35)) : '–')), lv('Serial number', serial), lv('Bonnet switch', b7(1)), lv('Ignition', b7(6)),
+    lv('Door switch(es)', b7(9)), lv('Boot switch', b7(11))];
+  if (p.length > 19) p.slice(16, 20).forEach((c, i) => rows.push(lv(`Key ${i + 1} rolling counter`, String(c))));
+  return rows;
+}
+
+// --- Bosch 5.3 ABS (BoschABS53, KW1281 blocks handled on the Pi) ---
+async function absReceive(ms = 2000) {
+  const body = await LIVE.link.kwReceive(ms);
+  if (!body || body.length < 2) return null;
+  traffic('RX', body, 'KW1281 block');
+  LIVE.abs.counter = body[0];
+  return { title: body[1], data: body.slice(2) };
+}
+async function absSend(title, data = []) {
+  LIVE.abs.counter = (LIVE.abs.counter + 1) & 0xff;
+  const body = [LIVE.abs.counter, title, ...data];
+  traffic('TX', body, 'KW1281 block');
+  await LIVE.link.command(CMD.kwBlock, body, 3000);
+}
+function absConnect() {
+  return exclusive('Connecting to ABS…', async () => {
+    await claim('ABS');
+    LIVE.abs = { counter: 0, ident: [], faults: null };
+    try { await line.configure('ABS'); await LIVE.link.command(CMD.kwMode, [1]); await line.slowInit(0x20, true, false); }
+    catch (e) { LIVE.abs = null; LIVE.owner = null; await LIVE.link.command(CMD.kwMode, [0]).catch(() => {}); throw e; }
+    for (let i = 0; i < 8; i++) {
+      const b = await absReceive();
+      if (!b || b.title === 0x09) break;
+      const t = ascii(b.data).trim();
+      if (t) LIVE.abs.ident.push(t);
+      await absSend(0x09);
+    }
+  });
+}
+const absOp = (what, fn) => LIVE.abs ? exclusive(what, fn) : (S.alert = 'Connect the ABS in Modules → ABS first', render());
+async function absReadFaults() {
+  await absSend(0x07);
+  const faults = [];
+  for (let b; (b = await absReceive());) {
+    if (b.title === 0x09) break;
+    if (b.title === 0xFC) for (let i = 0; i + 2 < b.data.length; i += 3) {
+      const code = b.data[i] << 8 | b.data[i + 1];
+      if (code !== 0xFFFF) faults.push([code, b.data[i + 2]]);
+    }
+    await absSend(0x09);
+  }
+  LIVE.abs.faults = faults;
+}
+
+// --- Live screens ---
+const busyRow = () => LIVE.busy ? `<div class="row"><div class="spinner"></div><span class="lbl">${esc(LIVE.busy)}</span></div>` : '';
+const needBridge = (what) => ({ title: what, body: msgs() + `<div class="empty"><b>No bridge</b>Connect to the Pi's USB bridge in More → Adapter first.</div>` + sec([btn('Open Adapter', 'route:adapter')]) });
+const liveScreens = {
+  adapter: () => {
+    const sim = S.adapterKind === 'Simulator';
+    const rows = [lv('Bridge device', 'Raspberry Pi (this server)'), seg(['This Pi', 'Simulator'], sim ? 'Simulator' : 'This Pi', 'adapterKind').replace('class="seg"', 'class="seg" style="margin:10px 16px"')];
+    if (!sim) {
+      rows.push(busyRow() || (LIVE.link ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${esc(LIVE.info.bridge || 'Bridge')}</span>`) : lv('Not connected', '')));
+      rows.push(LIVE.link ? btn('Disconnect', 'livebridge:off', 'destructive') : btn('Connect', 'livebridge:on'));
+    } else rows.push(S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn'));
+    let body = msgs() + sec(rows, 'Rover Bridge (Webasto, 5AS, ABS)', sim ? 'A virtual 5AS, Bosch ABS and Webasto, for trying the app without the car.'
+      : `Served by ${LIVE.info.hostname}. The page talks to the Rover USB Bridge on the Pi, which drives one USB cable per module. While this page uses the bridge, the iPhone app cannot.`);
+    if (!sim) body += sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])).concat(LIVE.link ? [btn('Refresh device list', 'livebridge:devices')] : []), 'USB cables',
+      'Which /dev/ttyUSBx each module uses (engine: Engine tab, now ' + S.ecuPort + '). A change applies the next time a module connects.'
+        + (LIVE.link ? (LIVE.devices.length ? ' Found: ' + LIVE.devices.join(', ') + '.' : ' The Pi reports no USB serial devices.') : '')
+        + (S.devices.ABS === S.ecuPort ? " ABS shares the engine's K-line and cable: stop the engine connection before reading the ABS." : ''));
+    body += sec([tog('Expert mode', S.expert, 'expert')], 'Expert');
+    return { title: 'Rover Diag', body };
+  },
+  heater: () => {
+    if (!LIVE.link) return needBridge('Webasto heater');
+    const h = LIVE.heater;
+    if (!h) return { title: 'Webasto heater', body: msgs() + sec([busyRow() || btn('Connect to heater', 'liveheat:connect')], 'W-Bus', `2400 baud 8E1 on ${S.devices.Webasto}. Ignition not needed.`) };
+    const st = liveHeaterStatus();
+    let body = msgs() + sec(h.ident.filter(([id]) => [0x0B, 0x07, 0x04, 0x0A].includes(id)).map(([id, n, d]) => lv(n, esc(wIdent(id, d))))
+      .concat([busyRow(), btn('Disconnect', 'liveheat:disconnect', 'destructive')]), 'W-Bus');
+    body += `<div class="sec"><div class="sec-h">Control</div><div class="group"><div class="row"><span class="lbl" style="flex:none">Run time</span><input type="range" class="slider" id="minutes" min="10" max="120" step="5" value="${S.heater.minutes}" aria-label="Run time"><span class="val" style="width:60px">${S.heater.minutes} min</span></div>
+      <div class="btns"><button class="pill prim" data-act="heat:Parking heater">🔥 Heat</button><button class="pill" data-act="heat:Ventilation">Vent</button><button class="pill red" data-act="heatoff">Off</button></div>
+      ${h.mode ? `<div class="row warn"><span class="lbl" style="font-size:13px">${esc(h.mode)} running – keep-alive every 10 s while this page is open</span></div>` : ''}</div>
+      <div class="sec-f">Only run the parking heater outdoors or with the exhaust well ventilated, and with enough battery charge.</div></div>`;
+    body += sec([`<div class="tiles">${ttile('Coolant', st.temp, '°C')}${ttile('Voltage', isNaN(st.volt) ? '–' : st.volt.toFixed(1), 'V')}${ttile('Heating power', st.power, 'W')}${ttile('Flame', st.flame ? 'Yes' : 'No', '', st.flame ? 'orange' : 'dim')}</div>`]);
+    body += sec([link('All status values', 'hstatus'), link('Fault memory', 'herrors', h.errors.length ? `<span style="color:var(--red)">${h.errors.length}</span>` : 'None')], 'Read');
+    return { title: 'Webasto heater', body };
+  },
+  hstatus: () => {
+    if (!LIVE.heater) return needBridge('Heater status');
+    const s = liveHeaterStatus(), b = (v) => v === undefined ? '–' : v ? 'On' : 'Off', f = (v, d) => isNaN(v) ? '–' : v.toFixed(d);
+    return { title: 'Heater status', small: true, body: sec([lv('Coolant temperature', `<b>${s.temp}</b> °C`), lv('Supply voltage', `<b>${f(s.volt, 2)}</b> V`), lv('Heating power', `<b>${s.power}</b> W`),
+      lv('Flame detected', `<b>${s.flame ? 'On' : 'Off'}</b>`), lv('Flame detector resistance', `<b>${f(s.res, 2)}</b> Ω`), lv('Operating state', `<b>${s.state}</b>`)], 'Heater')
+      + sec([lv('Combustion air fan', `<b>${b(s.fan)}</b>`), lv('Combustion air fan power', `<b>${s.fanPct}</b> %`), lv('Glow plug', `<b>${b(s.glow)}</b>`), lv('Glow plug power', `<b>${s.glowPct}</b> %`),
+        lv('Fuel pump', `<b>${b(s.pump)}</b>`), lv('Fuel pump frequency', `<b>${f(s.pumpHz, 2)}</b> Hz`), lv('Circulation pump', `<b>${b(s.circ)}</b>`), lv('Circulation pump power', `<b>${s.circPct}</b> %`),
+        lv('Vehicle fan relay', `<b>${b(s.fanRelay)}</b>`)], 'Electrical & switches')
+      + sec([lv('Main switch', `<b>${b(s.mainSwitch)}</b>`), lv('Summer mode', `<b>${b(s.summer)}</b>`), lv('Generator D+', `<b>${b(s.dplus)}</b>`), lv('Ignition (T15)', `<b>${b(s.t15)}</b>`), lv('Boost mode', `<b>${b(s.boost)}</b>`)], 'Inputs')
+      + sec([lv('Working hours', `<b>${s.work}</b>`), lv('Operating hours', `<b>${s.oper}</b>`), lv('Start counter', `<b>${s.starts}</b>`)], 'Counters')
+      + sec(LIVE.heater.ident.map(([id, n, d]) => lv(n, esc(wIdent(id, d)))), 'Identification') };
+  },
+  herrors: () => {
+    if (!LIVE.heater) return needBridge('Fault memory');
+    const e = LIVE.heater.errors;
+    return { title: 'Fault memory', small: true, body: msgs() + sec(e.length ? e.map(([c, n]) => `<div class="row"><span class="lbl"><span class="mono"><b>0x${hex2(c)}</b></span> ${esc(WBUS_ERR_ALL[c] || 'Unknown fault')}<small>Occurred ${n}×</small></span></div>`) : [lv('No stored faults', '')], 'Stored faults')
+      + sec([busyRow(), btn('Re-read', 'liveheat:errors'), btn('Clear fault memory', 'confirm:hclear', 'destructive')]) };
+  },
+  immo: () => {
+    if (!LIVE.link) return needBridge('5AS immobiliser');
+    const i = LIVE.immo;
+    if (!i) return { title: '5AS immobiliser', small: true, body: msgs() + sec([busyRow() || btn('Connect (normal mode)', 'liveimmo:connect')], 'Connection', `16-pin OBD pins 1/3 on ${S.devices['5AS']}, 12 V levels; the cable must invert the signals. EEPROM mode is only in the iPhone app.`) };
+    return { title: '5AS immobiliser', small: true, body: msgs() + sec([lv('Mode', `Normal (0x1C), key bytes ${hexs(i.kw)}`), busyRow(), btn('Disconnect', 'liveimmo:disconnect', 'destructive')], 'Connection')
+      + sec([btn('Read status', 'liveimmo:read'), ...immoRows()], 'Status')
+      + sec([['Horn', 8], ['5AS LED', 9], ['Hazard lights', 13]].map(([n, k]) => tog(n, i.tests[k], 'immo:' + k, `0x3${k.toString(16).toUpperCase()} / 0x2${k.toString(16).toUpperCase()}`)), 'Output tests')
+      + sec([btn('Start key fob programming (0x5F)', 'liveimmo:fobstart'), btn('End key fob programming (0x6F)', 'liveimmo:fobend')], 'Key fobs', 'Start programming, press a button on each fob you want to keep (up to 4), then end programming.') };
+  },
+  abs: () => {
+    if (!LIVE.link) return needBridge('ABS');
+    const a = LIVE.abs;
+    if (!a) return { title: 'ABS', small: true, body: msgs() + sec([busyRow() || btn('Connect to ABS', 'liveabs:connect')], 'Bosch 5.3 ABS (experimental)', `K-line, 5-baud address 0x20, on ${S.devices.ABS}.`) };
+    return { title: 'ABS', small: true, body: msgs() + sec(a.ident.map(t => lv(esc(t), '', 'mono')).concat([busyRow(), btn('Disconnect', 'liveabs:disconnect', 'destructive')]), 'Bosch 5.3 ABS')
+      + sec([btn('Read faults', 'liveabs:faults'), ...(a.faults === null ? [] : a.faults.length ? a.faults.map(([c, s]) => lv('Code ' + String(c).padStart(5, '0'), 'status 0x' + hex2(s), 'bad')) : [lv('✓ No faults reported', '', 'ok')]),
+        btn('Clear faults', 'liveabs:clear')], 'Fault codes') };
+  },
+};
+for (const [k, f] of Object.entries(liveScreens)) {
+  const sim = screens[k];
+  screens[k] = () => (k === 'adapter' ? LIVE.on : liveBridge()) ? f() : sim();
+}
+
+// --- Hook the simulator's functions ---
+const sim = { ecuConnected, ecuData, faults, heaterStatus, act, partCard };
+ecuConnected = () => liveEngine() ? !!(S.running && LIVE.status && LIVE.status.connected && LIVE.status.ecuType === S.selectedECU) : sim.ecuConnected();
+ecuData = () => liveEngine() ? ((LIVE.status && LIVE.status.ecuData) || {}) : sim.ecuData();
+faults = () => liveEngine() ? ((LIVE.status && LIVE.status.faults) || []).filter(f => f !== 'not-checked-yet').map(agentFaultName) : sim.faults();
+heaterStatus = () => {
+  if (!liveBridge()) return sim.heaterStatus();
+  const s = liveHeaterStatus();
+  return { ...s, temp: s.temp, volt: isNaN(s.volt) ? 0 : s.volt, pumpHz: isNaN(s.pumpHz) ? 0 : s.pumpHz };
+};
+partCard = (p) => {
+  if (!liveBridge() || !['abs', 'alarm'].includes(p)) return sim.partCard(p);
+  const head = `<div class="row"><span class="lbl"><b>${esc(PART_NAMES[p])}</b></span><span class="val" data-act="part:" style="cursor:pointer" aria-label="Close">✕</span></div>`;
+  if (p === 'abs') return sec([head, ...(LIVE.abs ? [lv('Module', esc(LIVE.abs.ident[0] || 'Bosch 5.3')), ...(LIVE.abs.faults || []).map(([c, s]) => lv('Code ' + String(c).padStart(5, '0'), 'status 0x' + hex2(s), 'bad'))] : [lv('Not connected', '')]), btn('Open ABS', 'route:abs')]);
+  if (!LIVE.immo) return sec([head, lv('Connect the 5AS in Modules → 5AS', ''), btn('Open 5AS', 'route:immo')]);
+  const d = LIVE.immo.data || [], b7 = (i) => i < d.length ? (d[i] & 0x80 ? 'Open / on' : 'Closed / off') : '–';
+  return sec([head, lv('Doors', b7(9)), lv('Bonnet', b7(1)), lv('Boot', b7(11)), lv('Ignition', b7(6)),
+    tog('Hazard lights test', LIVE.immo.tests[13], 'immo:13'), tog('Horn test', LIVE.immo.tests[8], 'immo:8'), tog('5AS LED test', LIVE.immo.tests[9], 'immo:9')]);
+};
+act = (a) => {
+  const [k, arg] = a.split(/:(.*)/s);
+  if (k === 'livebridge') { if (arg === 'on') bridgeConnect(); else if (arg === 'off') bridgeDisconnect(); else exclusive('Listing devices…', async () => { LIVE.devices = await LIVE.link.listDevices(); }); return; }
+  if (k === 'liveheat') {
+    if (arg === 'connect') heaterConnect();
+    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'errors') heaterOp('Reading fault memory', heaterReadErrors);
+    return;
+  }
+  if (k === 'liveimmo') {
+    if (arg === 'connect') immoConnect();
+    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'read') immoOp('Reading status', immoRead);
+    if (arg === 'fobstart') immoOp('Key fob programming', async () => { await immoCommand(0x5F); S.alert = 'Key fob programming started: press a button on each fob to keep'; });
+    if (arg === 'fobend') immoOp('Key fob programming', async () => { await immoCommand(0x6F); S.alert = 'Key fob programming ended'; });
+    return;
+  }
+  if (k === 'liveabs') {
+    if (arg === 'connect') absConnect();
+    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'faults') absOp('Reading faults', absReadFaults);
+    if (arg === 'clear') absOp('Clearing faults', async () => { await absSend(0x05); await absReceive(); await absReadFaults(); });
+    return;
+  }
+  if (liveBridge()) {
+    if (k === 'heat') { const minutes = S.heater.minutes; heaterOp(`${arg} on for ${minutes} min`, async () => { await wbus(HEAT_MODES[arg], [minutes]); LIVE.heater.mode = arg; S.heater.mode = arg; }); return; }
+    if (k === 'heatoff') { heaterOp('Switching heater off', async () => { await wbus(0x10); LIVE.heater.mode = null; S.heater.mode = null; }); return; }
+    if (k === 'hclear') { S.sheet = null; heaterOp('Clearing fault memory', async () => { await wbus(0x56, [0x03]); await heaterReadErrors(); }); return; }
+    if (k === 'immo') {
+      const item = +arg;
+      immoOp('Output test', async () => { const on = !LIVE.immo.tests[item]; await immoCommand((on ? 0x30 : 0x20) | item); LIVE.immo.tests[item] = on; });
+      return;
+    }
+  }
+  if (liveEngine()) {
+    if (k === 'start') {
+      S.running = true; S.selectedECU = arg; S.outputs = {}; LIVE.status = null; agentPoll();
+      (async () => {
+        try { await agentGet('serialPort/' + encodeURIComponent(portName(S.ecuPort))); await agentGet('ecu/' + encodeURIComponent(arg)); S.agentLog.push(`Connecting to ${ECUS[arg]} on ${S.ecuPort}`); }
+        catch (e) { S.alert = `Cannot reach rover-mems-agent: ${e.message}`; S.running = false; S.selectedECU = null; }
+        render();
+      })();
+      render(); return;
+    }
+    if (k === 'stop') { S.running = false; S.selectedECU = null; LIVE.status = null; render(); return; }
+    if (k === 'cmd') { agentCommand(arg); return; }
+    if (k === 'out') { const on = !S.outputs['startTest' + arg]; S.outputs['startTest' + arg] = on; agentCommand((on ? 'startTest' : 'stopTest') + arg); return; }
+    if (k === 'alloff') { for (const key of Object.keys(S.outputs)) if (S.outputs[key]) { S.outputs[key] = false; agentCommand(key.replace('startTest', 'stopTest')); } return; }
+    if (k === 'doclear') { S.sheet = null; agentCommand('clearfaults'); return; }
+  }
+  sim.act(a);
+};
+document.addEventListener('change', (e) => {
+  if (e.target.dataset.change === 'ecuPort' && liveEngine() && S.running)
+    agentGet('serialPort/' + encodeURIComponent(portName(S.ecuPort))).catch(err => { S.alert = err.message; });
+});
+
+// Switch to live data when this page is served by the Pi.
+(async () => {
+  try {
+    if (!/^https?:$/.test(location.protocol)) return;
+    const r = await fetch('/rover/info', { cache: 'no-store' });
+    if (!r.ok) return;
+    LIVE.info = await r.json();
+    LIVE.on = true;
+    S.agentSource = 'rover-mems-agent'; S.running = false; S.selectedECU = null;
+    if (S.adapterKind !== 'Simulator') S.adapterKind = 'This Pi';
+    S.adapterConnected = false; S.heater.mode = null; S.traffic = []; S.agentLog = [];
+    document.title = 'Rover Diag – ' + LIVE.info.hostname;
+    render();
+  } catch (e) {}
+})();
 
 // Prime a little history so the console isn't empty at first glance.
 for (let i = 0; i < 6; i++) { S.traffic.push(['TX', 'F4 03 50 05 A2', '']); S.traffic.push(['RX', '4F 0B D0 05 3A 30 70 01 13 88 04 B0 9C', '']); S.agentLog.push(i % 2 ? 'Got data 7D' : 'Got data 80'); }
