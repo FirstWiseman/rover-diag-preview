@@ -254,7 +254,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>
 const S = {
   tab: 'overview', stack: { overview: [], engine: [], heater: [], modules: [], more: [] },
   expert: false, adapterKind: 'Simulator', adapterConnected: true,
-  agentSource: 'Simulator', host: '192.168.1.100', port: '8080',
+  agentSource: 'Simulator', host: 'raspberrypi.local', port: '8080',
   ecu: '1.9', running: true, selectedECU: '1.9', connectedAt: 0, faultsCleared: false, alert: null,
   outputs: {}, tick: 0, logTab: 'bridge',
   heater: { connected: true, mode: null, minutes: 30, temp: 8, errors: [[0x02, 3], [0x84, 1]], monitoring: true },
@@ -376,21 +376,21 @@ const screens = {
       ...(usb ? [`<div class="row"><input class="input" id="usbhost" value="${esc(S.usbHost)}" aria-label="Agent computer IP"><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
       S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${usb ? 'RoverUSBBridge 1.0' : 'Simulator (virtual 5AS, ABS and Webasto)'}</span>`) : lv('Not connected', '', ''),
       S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn')],
-      'Rover Bridge (Webasto, 5AS, ABS)', usb ? 'Runs Tools/rover-usb-bridge on the rover-mems-agent computer (Raspberry Pi or laptop), with one USB cable per module. Uses the agent\'s IP by default, port 35000.'
+      'Rover Bridge (Webasto, 5AS, ABS)', usb ? 'The USB bridge runs next to rover-mems-agent on the Raspberry Pi 3B (installed by the rover-pi package), with one USB cable per module. Uses the agent\'s address by default, port 35000.'
         : 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.')
     + (usb ? sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])),
       'USB cables', 'Which /dev/ttyUSBx each module uses. The engine ECU cable is chosen in the Engine tab (now ' + S.ecuPort + '). A change applies the next time a module connects.'
         + (S.adapterConnected ? ' Found: ' + USB_PORTS.filter(d => d !== '/dev/ttyUSB2').join(', ') + '.' : '')
         + (S.devices.ABS === S.ecuPort ? ' ABS shares the engine\'s K-line and cable: stop the engine connection before reading the ABS.' : '')) : '')
     + sec([tog('Expert mode', S.expert, 'expert')], 'Expert', "Shows the agent's MEMS 2J research commands, 5AS EEPROM writing, undocumented 5AS tests, Webasto component tests and the raw W-Bus console.")
-    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)')], 'Your car') }; },
+    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)'), lv('Diag. computer', 'Raspberry Pi 3B')], 'Your car') }; },
 
   engine: () => {
     const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource"><option ${S.agentSource === 'rover-mems-agent' ? 'selected' : ''}>rover-mems-agent</option><option ${S.agentSource === 'Simulator' ? 'selected' : ''}>Simulator</option></select></div>`];
     if (S.agentSource !== 'Simulator') rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
     if (S.running) rows.push(lv('Agent', `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
     rows.push(devSelect('ECU cable', 'ecuPort', S.ecuPort));
-    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : 'Run rover-mems-agent on a laptop or Raspberry Pi with the diagnostic cable, on the same Wi-Fi as this phone. It listens on port 8080. With several USB cables, start it from /dev (Tools/rover-usb-bridge/start.sh does this); the app then selects the ECU cable (now ' + S.ecuPort + ').');
+    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : 'rover-mems-agent runs on the Raspberry Pi 3B (the rover-pi package installs it as a service), on the same Wi-Fi as this phone or the phone\'s hotspot. Address raspberrypi.local or the Pi\'s IP, port 8080. With several USB cables the app selects the ECU cable (now ' + S.ecuPort + ').');
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
     if (S.running && S.selectedECU === S.ecu) {
       ecuRows.push(ecuConnected() ? lv(`✓ Connected to ${ECUS[S.selectedECU]}`, '', 'ok') : `<div class="row"><div class="spinner"></div><span class="lbl">Waiting for the ECU to answer…</span></div>`);
