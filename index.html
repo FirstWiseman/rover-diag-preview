@@ -261,6 +261,9 @@ const S = {
   immo: { mode: 'normal', tests: {} },
   sheet: null, traffic: [], agentLog: [],
 };
+const ENGINE_SOURCES = ['Rover Diag (Pi)', 'rover-mems-agent', 'Simulator'];
+// Rover Engine has the documented MEMS 1.x commands the agent lacks.
+const ownEngine = () => S.agentSource === 'Rover Diag (Pi)' && ['1.9', '1.x'].includes(S.selectedECU || S.ecu);
 const ECUS = { '1.9': 'MEMS 1.9 (16-pin OBD)', '1.x': 'MEMS 1.2 / 1.3 / 1.6 (3-pin)', '2J': 'MEMS 2J', '3': 'MEMS 3', 'rc5': 'RC5 SRS airbag' };
 const now = () => performance.now();
 S.connectedAt = now() - 5000;
@@ -396,11 +399,15 @@ const screens = {
     + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)'), lv('Diag. computer', 'Raspberry Pi 3B')], 'Your car') }; },
 
   engine: () => {
-    const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource"><option ${S.agentSource === 'rover-mems-agent' ? 'selected' : ''}>rover-mems-agent</option><option ${S.agentSource === 'Simulator' ? 'selected' : ''}>Simulator</option></select></div>`];
+    const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource">${ENGINE_SOURCES.map(o => `<option ${S.agentSource === o ? 'selected' : ''}>${o}</option>`).join('')}</select></div>`];
     if (S.agentSource !== 'Simulator' && !LIVE.on) rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
-    if (S.running) rows.push(lv('Agent', liveEngine() ? (LIVE.status ? `<span style="color:var(--green)">✓ v${esc(LIVE.status.agentVersion || '?')}</span>` : 'Waiting…') : `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
+    const ver = (v) => /^\d/.test(v) ? 'v' + v : v;
+    if (S.running) rows.push(lv(S.agentSource === 'rover-mems-agent' ? 'Agent' : 'Engine service', liveEngine() ? (LIVE.status ? `<span style="color:var(--green)">✓ ${esc(ver(LIVE.status.agentVersion || '?'))}</span>` : 'Waiting…') : `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
     rows.push(devSelect('ECU cable', 'ecuPort', S.ecuPort));
-    let body = sec(rows, 'rover-mems-agent', S.agentSource === 'Simulator' ? 'Simulated agent with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.' : (LIVE.on ? 'rover-mems-agent on ' + LIVE.info.hostname + ', reached through this page. Ignition on, then Connect.' : 'rover-mems-agent runs on the Raspberry Pi 3B (the rover-pi package installs it as a service), on the same Wi-Fi as this phone or the phone\'s hotspot. Address raspberrypi.local or the Pi\'s IP, port 8080. With several USB cables the app selects the ECU cable (now ' + S.ecuPort + ').'));
+    const where = LIVE.on ? 'on ' + LIVE.info.hostname + ', reached through this page' : 'on the Raspberry Pi 3B (rover-pi package)';
+    let body = sec(rows, 'Engine connection', S.agentSource === 'Simulator' ? 'Simulated engine with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.'
+      : S.agentSource === 'rover-mems-agent' ? `Optional: rover-mems-agent ${where} (port 8080), for all MEMS versions including 2J and 3. It keeps the ECU cable until it is restarted, even after Stop.`
+      : `Rover Diag's own engine service ${where} (port 8081): MEMS 1.9, MEMS 1.2/1.3/1.6 and the RC5 airbag, on the ECU cable ${S.ecuPort}. Stop releases the cable. For MEMS 2J and 3 choose rover-mems-agent.`);
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
     if (S.running && S.selectedECU === S.ecu) {
       ecuRows.push(ecuConnected() ? lv(`✓ Connected to ${ECUS[S.selectedECU]}`, '', 'ok') : `<div class="row"><div class="spinner"></div><span class="lbl">Waiting for the ECU to answer…</span></div>`);
@@ -434,18 +441,23 @@ const screens = {
       + sec([btn('Clear fault codes', 'confirm:clearfaults')]) };
   },
   tests: () => {
-    const T = [['Fuel pump', 'FuelPump'], ['Radiator fan 1', 'Fan1'], ['A/C clutch', 'ACClutch'], ['Purge valve', 'PurgeValve'], ['Lambda heater', 'LambdaHeater']];
+    const T = [['Fuel pump', 'FuelPump'], ['Radiator fan 1', 'Fan1'], ['A/C clutch', 'ACClutch'], ['Purge valve', 'PurgeValve'], ['Lambda heater', 'LambdaHeater']]
+      .concat(ownEngine() ? [['Radiator fan 2', 'Fan2'], ['Coolant gauge', 'CoolantGauge'], ['Rev counter', 'RpmGauge']] : []);
     return { title: 'Actuator tests', small: true, body: msgs() + sec(T.map(([n, k]) => tog(n, S.outputs['startTest' + k], 'out:' + k, `startTest${k} / stopTest${k}`)).concat([btn('Switch everything off', 'alloff')]),
       'Relays & outputs', 'Outputs stay on until switched off. Run the fan and fuel pump only briefly, engine off.') + sec([btn('Rev counter test', 'cmd:startTestRpmGauge')]) };
   },
   adjust: () => {
-    const A = [['Idle speed', 'IdleSpeed'], ['Idle decay', 'IdleDecay'], ['Ignition advance offset', 'IgnitionAdvanceOffset'], ['Fuel trim 1', 'FuelTrim1'], ['Fuel trim 2', 'FuelTrim2']];
+    const A = [['Idle speed', 'increaseIdleSpeed', 'decreaseIdleSpeed'], ['Idle decay', 'increaseIdleDecay', 'decreaseIdleDecay'], ['Ignition advance offset', 'increaseIgnitionAdvanceOffset', 'decreaseIgnitionAdvanceOffset'],
+      ['Fuel trim 1', 'increaseFuelTrim1', 'decreaseFuelTrim1'], ['Fuel trim 2', 'increaseFuelTrim2', 'decreaseFuelTrim2']]
+      .concat(ownEngine() ? [['Idle air valve step', 'openIdleValveStep', 'closeIdleValveStep']] : []);
     const d = ecuData();
-    return { title: 'Adjustments', small: true, body: msgs() + sec(A.map(([n, k]) => `<div class="row"><span class="lbl">${n}</span><button class="round" data-act="cmd:decrease${k}" aria-label="${n} down">−</button><button class="round" data-act="cmd:increase${k}" aria-label="${n} up">+</button></div>`),
+    return { title: 'Adjustments', small: true, body: msgs() + sec(A.map(([n, up, down]) => `<div class="row"><span class="lbl">${n}</span><button class="round" data-act="cmd:${down}" aria-label="${n} down">−</button><button class="round" data-act="cmd:${up}" aria-label="${n} up">+</button></div>`),
       'Step up / down', 'Each tap moves the stored value by one step. Engine warm and idling for idle and timing. Count your taps so you can go back.')
       + sec(['rpm', 'idle_setpoint', 'idle_valve_position', 'ignition_advance_offset', 'ignition_advance', 'long_term_trim', 'short_term_trim_percent'].map(k => { const [v, u] = fmt(k, d[k]); return lv(FIELD[k][1], `${esc(v)} ${esc(u)}`); }), 'Live') };
   },
-  commands: () => ({ title: 'Commands', small: true, body: msgs() + sec([btn('Clear fault codes', 'confirm:clearfaults'), btn('Rev counter test', 'cmd:startTestRpmGauge')]) }),
+  commands: () => ({ title: 'Commands', small: true, body: msgs() + sec([btn('Clear fault codes', 'confirm:clearfaults'), btn('Rev counter test', 'cmd:startTestRpmGauge')]
+      .concat(ownEngine() ? [btn('Clear adaptations', 'cmd:clearAdaptations')].concat(S.expert ? [btn('Test injector 1', 'cmd:testInjector1'), btn('Test injector 2', 'cmd:testInjector2'), btn('Fire ignition coil', 'cmd:fireCoil')] : []) : []),
+      'Commands', ownEngine() ? 'Clear adaptations resets the learned fuel and idle values. Injector and coil tests (expert mode): engine off, keep clear of the HT leads.' : '') }),
 
   heater: () => {
     if (!S.adapterConnected) return { title: 'Webasto heater', body: `<div class="empty"><b>No adapter</b>Connect the diagnostic bridge (or the simulator) in the Adapter tab first.</div>` };
@@ -991,7 +1003,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[tabindex]')) { e.preventDefault(); e.target.click(); } });
 document.addEventListener('change', (e) => {
   const c = e.target.dataset.change;
-  if (c === 'agentSource') { S.agentSource = e.target.value; S.running = false; S.selectedECU = null; }
+  if (c === 'agentSource') {
+    if (LIVE.on && S.running && S.agentSource !== 'rover-mems-agent') agentGet('stop').catch(() => {});
+    S.agentSource = e.target.value; S.running = false; S.selectedECU = null; if (LIVE.on) LIVE.status = null;
+  }
   if (c === 'ecu') S.ecu = e.target.value;
   if (c === 'ecuPort') { S.ecuPort = e.target.value; S.alert = 'Agent: Serial port set to ' + S.ecuPort.replace('/dev/', ''); saveDevices(); }
   if (c === 'bridgeDevice') { S.bridgeDevice = e.target.value; saveDevices(); }
@@ -1039,8 +1054,10 @@ function traffic(dir, bytes, note) { S.traffic.push([dir, bytes ? hexs(bytes) : 
 class DiagError extends Error {}
 
 // --- Engine via rover-mems-agent ---
+// Rover Engine (/engine/, port 8081) and rover-mems-agent (/agent/, port 8080) share one API.
+const enginePath = () => S.agentSource === 'rover-mems-agent' ? '/agent/' : '/engine/';
 async function agentGet(path) {
-  const r = await fetch('/agent/' + path, { cache: 'no-store' });
+  const r = await fetch(enginePath() + path, { cache: 'no-store' });
   const t = await r.text();
   if (!r.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch (e) {} throw new Error(m); }
   return t;
@@ -1575,6 +1592,7 @@ act = (a) => {
   }
   if (liveEngine()) {
     if (k === 'start') {
+      if (S.agentSource !== 'rover-mems-agent' && ['2J', '3'].includes(arg)) { S.alert = `${ECUS[arg]} is not handled by Rover Diag's own engine connection yet. Choose rover-mems-agent as the source.`; render(); return; }
       S.running = true; S.selectedECU = arg; S.outputs = {}; LIVE.status = null; agentPoll();
       (async () => {
         try { await agentGet('serialPort/' + encodeURIComponent(portName(S.ecuPort))); await agentGet('ecu/' + encodeURIComponent(arg)); S.agentLog.push(`Connecting to ${ECUS[arg]} on ${S.ecuPort}`); }
@@ -1583,7 +1601,11 @@ act = (a) => {
       })();
       render(); return;
     }
-    if (k === 'stop') { S.running = false; S.selectedECU = null; LIVE.status = null; render(); return; }
+    if (k === 'stop') {
+      S.running = false; S.selectedECU = null; LIVE.status = null;
+      if (S.agentSource !== 'rover-mems-agent') agentGet('stop').then(() => S.agentLog.push('Stopped, cable released')).catch(() => {});
+      render(); return;
+    }
     if (k === 'cmd') { agentCommand(arg); return; }
     if (k === 'out') { const on = !S.outputs['startTest' + arg]; S.outputs['startTest' + arg] = on; agentCommand((on ? 'startTest' : 'stopTest') + arg); return; }
     if (k === 'alloff') { for (const key of Object.keys(S.outputs)) if (S.outputs[key]) { S.outputs[key] = false; agentCommand(key.replace('startTest', 'stopTest')); } return; }
@@ -1604,7 +1626,7 @@ document.addEventListener('change', (e) => {
     if (!r.ok) return;
     LIVE.info = await r.json();
     LIVE.on = true;
-    S.agentSource = 'rover-mems-agent'; S.running = false; S.selectedECU = null;
+    S.agentSource = 'Rover Diag (Pi)'; S.running = false; S.selectedECU = null;
     if (S.adapterKind !== 'Simulator') S.adapterKind = 'This Pi';
     S.adapterConnected = false; S.heater.mode = null; S.traffic = []; S.agentLog = [];
     document.title = 'Rover Diag – ' + LIVE.info.hostname;
