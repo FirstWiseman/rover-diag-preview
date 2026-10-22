@@ -1041,7 +1041,7 @@ $('#jump').addEventListener('click', (e) => { const b = e.target.closest('[data-
 // the engine comes from rover-mems-agent through /agent/… and the Webasto, 5AS and ABS go through
 // the /bridge WebSocket to the Rover USB Bridge. The protocol code below mirrors RoverCore
 // (BridgeSerialLink, DiagLine, WebastoHeater, Immobiliser5AS, BoschABS53).
-const LIVE = { on: false, info: null, status: null, poll: null, link: null, owner: null, busy: '', devices: [],
+const LIVE = { on: false, info: null, status: null, poll: null, link: null, lines: {}, busy: {}, devices: [],
   heater: null, immo: null, abs: null };
 const liveEngine = () => LIVE.on && S.agentSource !== 'Simulator';
 const liveBridge = () => LIVE.on && S.adapterKind !== 'Simulator';
@@ -1097,11 +1097,11 @@ class BridgeLink {
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => { this.ws = ws; resolve(); };
       ws.onerror = () => reject(new DiagError('Cannot reach the Rover USB Bridge on the Pi'));
-      ws.onclose = () => { this.ws = null; this.wake(); if (LIVE.link === this) liveBridgeLost(); };
+      ws.onclose = () => { this.ws = null; this.wake(); if (this.onLost) this.onLost(); };
       ws.onmessage = (e) => this.ingest(new Uint8Array(e.data));
     });
   }
-  close() { if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; } }
+  close() { this.onLost = null; if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; } }
   ingest(bytes) {
     this.buf.push(...bytes);
     for (;;) {
@@ -1170,89 +1170,109 @@ const LINES = {
   '5AS': { baud: 9600, parity: 0, port: 2, flags: 3, echo: false },
   ABS: { baud: 9600, parity: 0, port: 0, flags: 0, echo: true },
 };
-const line = {
-  cfg: LINES.Webasto,
-  async configure(module) {
-    this.cfg = LINES[module];
-    const device = S.devices[module];
-    traffic('--', null, `Line ${this.cfg.baud} baud, parity ${['none', 'even', 'odd'][this.cfg.parity]}, ${device}`);
-    await LIVE.link.configure({ ...this.cfg, echo: undefined, device });
-  },
-  async send(bytes, note) {
-    traffic('TX', bytes, note);
-    await LIVE.link.write(bytes, this.cfg.baud);
-    if (this.cfg.echo) {
-      const echo = await LIVE.link.read(bytes.length, bytes.length * 11000 / this.cfg.baud + 250);
-      if (hexs(echo) !== hexs(bytes)) throw new DiagError(`K-line echo mismatch, sent ${hexs(bytes)} got ${hexs(echo)}`);
-    }
-  },
-  async receive(count, ms) { const b = await LIVE.link.read(count, ms); if (b.length) traffic('RX', b); return b; },
-  async exactly(count, ms, what) {
-    const b = await this.receive(count, ms);
-    if (b.length !== count) throw new DiagError(`Timeout: ${what} (got ${b.length} of ${count} bytes: ${hexs(b)})`);
-    return b;
-  },
-  async untilIdle(gap = 120, first = 600, maxTime = 3000) {
-    const out = [], start = performance.now();
-    let wait = first;
-    while (performance.now() - start < maxTime) {
-      const c = await LIVE.link.read(64, wait);
-      if (!c.length) break;
-      out.push(...c); wait = gap;
-    }
-    if (out.length) traffic('RX', out);
-    return out;
-  },
-  async brk(low, high) { traffic('--', null, `Break ${low} ms low / ${high} ms high`); await LIVE.link.command(CMD.brk, [low & 0xff, low >> 8, high & 0xff, high >> 8], 2000 + low + high); },
-  async slowInit(address, invertKW2 = true, expectInvertedAddress = true) {
-    await LIVE.link.flush();
-    traffic('--', null, `5-baud init, address ${hex2(address)}`);
-    await LIVE.link.command(CMD.fiveBaud, [address, invertKW2 ? 1 : 0], 6000);
-    const sync = await this.exactly(1, 1500, '5-baud sync byte');
-    if (sync[0] !== 0x55) throw new DiagError(`Sync ${hex2(sync[0])}, expected 55`);
-    const kw = await this.exactly(2, 800, 'key bytes');
-    if (invertKW2) {
-      if (this.cfg.echo) await this.receive(1, 300);
-      if (expectInvertedAddress) await this.receive(1, 150);
-    }
-    traffic('--', null, `Key bytes ${hexs(kw)}`);
-    return kw;
-  },
-};
+// One line per module, each with its own WebSocket to the bridge – so its own session and USB cable on
+// the Pi. The heater, the 5AS and the ABS can run side by side (the ABS shares the engine's cable).
+function makeLine(module, link) {
+  const log = (dir, bytes, note) => traffic(dir, bytes, note ? `${module}: ${note}` : module);
+  return {
+    module, link, cfg: LINES[module],
+    async configure() {
+      const device = S.devices[module];
+      log('--', null, `Line ${this.cfg.baud} baud, parity ${['none', 'even', 'odd'][this.cfg.parity]}, ${device}`);
+      await this.link.configure({ ...this.cfg, echo: undefined, device });
+    },
+    async send(bytes, note) {
+      log('TX', bytes, note);
+      await this.link.write(bytes, this.cfg.baud);
+      if (this.cfg.echo) {
+        const echo = await this.link.read(bytes.length, bytes.length * 11000 / this.cfg.baud + 250);
+        if (hexs(echo) !== hexs(bytes)) throw new DiagError(`K-line echo mismatch, sent ${hexs(bytes)} got ${hexs(echo)}`);
+      }
+    },
+    async receive(count, ms) { const b = await this.link.read(count, ms); if (b.length) log('RX', b); return b; },
+    async exactly(count, ms, what) {
+      const b = await this.receive(count, ms);
+      if (b.length !== count) throw new DiagError(`Timeout: ${what} (got ${b.length} of ${count} bytes: ${hexs(b)})`);
+      return b;
+    },
+    async untilIdle(gap = 120, first = 600, maxTime = 3000) {
+      const out = [], start = performance.now();
+      let wait = first;
+      while (performance.now() - start < maxTime) {
+        const c = await this.link.read(64, wait);
+        if (!c.length) break;
+        out.push(...c); wait = gap;
+      }
+      if (out.length) log('RX', out);
+      return out;
+    },
+    async brk(low, high) { log('--', null, `Break ${low} ms low / ${high} ms high`); await this.link.command(CMD.brk, [low & 0xff, low >> 8, high & 0xff, high >> 8], 2000 + low + high); },
+    async slowInit(address, invertKW2 = true, expectInvertedAddress = true) {
+      await this.link.flush();
+      log('--', null, `5-baud init, address ${hex2(address)}`);
+      await this.link.command(CMD.fiveBaud, [address, invertKW2 ? 1 : 0], 6000);
+      const sync = await this.exactly(1, 1500, '5-baud sync byte');
+      if (sync[0] !== 0x55) throw new DiagError(`Sync ${hex2(sync[0])}, expected 55`);
+      const kw = await this.exactly(2, 800, 'key bytes');
+      if (invertKW2) {
+        if (this.cfg.echo) await this.receive(1, 300);
+        if (expectInvertedAddress) await this.receive(1, 150);
+      }
+      log('--', null, `Key bytes ${hexs(kw)}`);
+      return kw;
+    },
+  };
+}
+const HL = () => LIVE.lines.Webasto, IL = () => LIVE.lines['5AS'], AL = () => LIVE.lines.ABS;
 
-// One module owns the line at a time, and one operation runs at a time.
-let chain = Promise.resolve();
-function exclusive(what, fn) {
+// One operation at a time per module (and for the bridge connection itself).
+const chains = {};
+function exclusive(what, fn, key = 'bridge') {
   const run = async () => {
-    LIVE.busy = what; render();
+    if (what) { LIVE.busy[key] = what; render(); }
     try { return await fn(); }
     catch (e) { S.alert = e.message; traffic('--', null, 'Error: ' + e.message); }
-    finally { LIVE.busy = ''; render(); }
+    finally { if (what) { delete LIVE.busy[key]; render(); } }
   };
-  const p = chain.then(run, run);
-  chain = p.catch(() => {});
+  const p = (chains[key] || Promise.resolve()).then(run, run);
+  chains[key] = p.catch(() => {});
   return p;
 }
-async function claim(module) {
+async function openModule(module) {
   if (!LIVE.link) throw new DiagError('Connect the bridge first (More → Adapter)');
-  if (LIVE.owner && LIVE.owner !== module) await releaseOwner();
-  LIVE.owner = module;
+  if (LIVE.lines[module]) return LIVE.lines[module];
+  const link = new BridgeLink();
+  link.onLost = () => moduleLost(module);
+  await link.open();
+  return (LIVE.lines[module] = makeLine(module, link));
 }
-async function releaseOwner() {
-  const o = LIVE.owner;
-  LIVE.owner = null;
-  if (o === 'Webasto') heaterStopMonitor();
-  if (o === '5AS' && LIVE.immo) { try { await immoCommand(0xF6); } catch (e) {} LIVE.immo = null; }
-  if (o === 'ABS' && LIVE.abs) { try { await absSend(0x06); await LIVE.link.command(CMD.kwMode, [0]); } catch (e) {} LIVE.abs = null; }
-  if (o === 'Webasto') LIVE.heater = null;
+function forgetModule(module) {
+  if (module === 'Webasto') { heaterStopMonitor(); LIVE.heater = null; }
+  if (module === '5AS') LIVE.immo = null;
+  if (module === 'ABS') LIVE.abs = null;
+  delete LIVE.lines[module];
+}
+async function releaseModule(module) {
+  const L = LIVE.lines[module];
+  if (!L) return forgetModule(module);
+  if (module === '5AS' && LIVE.immo) { try { await immoCommand(0xF6); } catch (e) {} }
+  if (module === 'ABS' && LIVE.abs) { try { await absSend(0x06); await L.link.command(CMD.kwMode, [0]); } catch (e) {} }
+  forgetModule(module);
+  L.link.onLost = null;
+  L.link.close();
+}
+function moduleLost(module) {
+  forgetModule(module);
+  S.alert = `${module}: lost the connection to the bridge`; render();
 }
 function liveBridgeLost() {
-  LIVE.link = null; LIVE.owner = null; LIVE.heater = null; LIVE.immo = null; LIVE.abs = null; heaterStopMonitor();
-  S.adapterConnected = false; S.alert = 'Lost the connection to the bridge'; render();
+  for (const m of Object.keys(LIVE.lines)) { LIVE.lines[m].link.onLost = null; LIVE.lines[m].link.close(); forgetModule(m); }
+  LIVE.link = null; S.adapterConnected = false; S.alert = 'Lost the connection to the bridge'; render();
 }
 async function bridgeConnect() {
   await exclusive('Connecting to the bridge…', async () => {
     const link = new BridgeLink();
+    link.onLost = liveBridgeLost;
     await link.open();
     const info = await link.ping();
     LIVE.link = link; LIVE.info.bridge = info;
@@ -1261,7 +1281,11 @@ async function bridgeConnect() {
   });
 }
 async function bridgeDisconnect() {
-  await exclusive('Disconnecting…', async () => { await releaseOwner(); if (LIVE.link) LIVE.link.close(); LIVE.link = null; S.adapterConnected = false; });
+  await exclusive('Disconnecting…', async () => {
+    for (const m of Object.keys(LIVE.lines)) await releaseModule(m);
+    if (LIVE.link) { LIVE.link.onLost = null; LIVE.link.close(); }
+    LIVE.link = null; S.adapterConnected = false;
+  });
 }
 
 // --- Webasto W-Bus (WebastoHeater) ---
@@ -1292,16 +1316,16 @@ const WBUS_ERR_ALL = {
 const HEAT_MODES = { 'Parking heater': 0x21, Ventilation: 0x22, 'Supplemental heater': 0x23, 'Circulation pump': 0x24, Boost: 0x25 };
 function wbusFrame(cmd, data) { const f = [0xF4, data.length + 2, cmd, ...data]; f.push(f.reduce((x, b) => x ^ b, 0)); return f; }
 async function wbusExchange(cmd, data, ms) {
-  await line.send(wbusFrame(cmd, data));
+  await HL().send(wbusFrame(cmd, data));
   const deadline = performance.now() + ms;
   let header = 0;
   while (header !== 0x4F) {
     if (performance.now() > deadline) throw new DiagError(`Timeout: W-Bus reply to ${hex2(cmd)}`);
-    header = (await line.exactly(1, ms, 'W-Bus header'))[0];
+    header = (await HL().exactly(1, ms, 'W-Bus header'))[0];
   }
-  const len = (await line.exactly(1, 200, 'W-Bus length'))[0];
+  const len = (await HL().exactly(1, 200, 'W-Bus length'))[0];
   if (len < 2) throw new DiagError(`Unexpected W-Bus length ${len}`);
-  const body = await line.exactly(len, 100 + len * 11000 / 2400, 'W-Bus body');
+  const body = await HL().exactly(len, 100 + len * 11000 / 2400, 'W-Bus body');
   const all = [0x4F, len, ...body];
   if (all.slice(0, -1).reduce((x, b) => x ^ b, 0) !== all[all.length - 1]) throw new DiagError('Checksum error');
   const payload = body.slice(1, -1);
@@ -1312,11 +1336,11 @@ async function wbusExchange(cmd, data, ms) {
 async function wbus(cmd, data = [], ms = 1000) {
   const h = LIVE.heater;
   // The bus sleeps after a few seconds of silence; wake it with a 50 ms break.
-  if (performance.now() - h.lastActivity > 3000) await line.brk(50, 50);
+  if (performance.now() - h.lastActivity > 3000) await HL().brk(50, 50);
   try {
     for (let attempt = 1; ; attempt++) {
       try { return await wbusExchange(cmd, data, ms); }
-      catch (e) { if (attempt >= 3 || e.negative) throw e; await LIVE.link.flush(); await sleep(100); }
+      catch (e) { if (attempt >= 3 || e.negative) throw e; await HL().link.flush(); await sleep(100); }
     }
   } finally { h.lastActivity = performance.now(); }
 }
@@ -1336,26 +1360,26 @@ async function heaterReadErrors() {
 }
 function heaterConnect() {
   return exclusive('Connecting to heater…', async () => {
-    await claim('Webasto');
+    await openModule('Webasto');
     LIVE.heater = { lastActivity: -1e9, ident: [], status: null, errors: [], mode: null };
     try {
-      await line.configure('Webasto');
-      await LIVE.link.flush();
+      await HL().configure();
+      await HL().link.flush();
       for (const [id, name] of WBUS_IDENT) {
         try { LIVE.heater.ident.push([id, name, await wbusPage(0x51, id)]); } catch (e) { if (e.message.startsWith('K-line')) throw e; }
       }
       if (!LIVE.heater.ident.length) throw new DiagError('Timeout: heater did not answer identification');
       await heaterReadStatus();
-    } catch (e) { LIVE.heater = null; LIVE.owner = null; throw e; }
+    } catch (e) { await releaseModule('Webasto'); throw e; }
     try { await heaterReadErrors(); } catch (e) {}
     heaterStartMonitor();
-  });
+  }, 'Webasto');
 }
 function heaterStartMonitor() {
   heaterStopMonitor();
   let lastKeepAlive = performance.now();
   LIVE.heaterTimer = setInterval(() => {
-    if (!LIVE.heater || LIVE.busy) return;
+    if (!LIVE.heater || LIVE.busy.Webasto) return;
     exclusive('', async () => {
       if (!LIVE.heater) return;
       await heaterReadStatus();
@@ -1363,11 +1387,11 @@ function heaterStartMonitor() {
         await wbus(0x44, [HEAT_MODES[LIVE.heater.mode], 0]);
         lastKeepAlive = performance.now();
       }
-    });
+    }, 'Webasto');
   }, 2000);
 }
 function heaterStopMonitor() { clearInterval(LIVE.heaterTimer); LIVE.heaterTimer = null; }
-const heaterOp = (what, fn) => LIVE.heater ? exclusive(what, fn) : (S.alert = 'Connect the heater in the Webasto tab first', render());
+const heaterOp = (what, fn) => LIVE.heater ? exclusive(what, fn, 'Webasto') : (S.alert = 'Connect the heater in the Webasto tab first', render());
 const wIdent = (id, d) => (id === 0x07 || id === 0x0B) ? ascii(d).trim() : ((id === 0x04 || id === 0x05) && d.length >= 3) ? `${String(d[0]).padStart(2, '0')}.${String(d[1]).padStart(2, '0')}.${(d[2] < 50 ? 2000 : 1900) + d[2]}` : (id === 0x0A && d.length) ? `${d[0] >> 4}.${d[0] & 15}` : hexs(d);
 function liveHeaterStatus() {
   const st = (LIVE.heater && LIVE.heater.status) || {}, by = (p, i) => p && i < p.length ? p[i] : undefined;
@@ -1385,29 +1409,29 @@ function liveHeaterStatus() {
 
 // --- 5AS immobiliser (Immobiliser5AS, normal mode) ---
 async function immoCommand(cmd) {
-  await line.send([cmd]);
-  const r = await line.untilIdle(80, 600);
+  await IL().send([cmd]);
+  const r = await IL().untilIdle(80, 600);
   return r[0] === cmd ? r.slice(1) : r;
 }
 function immoConnect() {
   return exclusive('Connecting to 5AS…', async () => {
-    await claim('5AS');
+    await openModule('5AS');
     let kw;
-    try { await line.configure('5AS'); kw = await line.slowInit(0x1C); } catch (e) { LIVE.owner = null; throw e; }
+    try { await IL().configure(); kw = await IL().slowInit(0x1C); } catch (e) { await releaseModule('5AS'); throw e; }
     // The module says nothing more until asked; drop any stray init bytes so the first reply lines up.
-    await sleep(100); await LIVE.link.flush();
+    await sleep(100); await IL().link.flush();
     LIVE.immo = { kw, data: null, tests: {} };
     await immoRead();
-  });
+  }, '5AS');
 }
 async function immoRead() {
-  await line.send([0x83]);
-  let r = await line.untilIdle(80, 600);
+  await IL().send([0x83]);
+  let r = await IL().untilIdle(80, 600);
   if (r[0] === 0x83) r = r.slice(1);
   if (!r.length || r.length < r[0]) throw new DiagError(`Unexpected 5AS data packet ${hexs(r)}`);
   LIVE.immo.data = r.slice(0, r[0]);
 }
-const immoOp = (what, fn) => LIVE.immo ? exclusive(what, fn) : (S.alert = 'Connect the 5AS in Modules → 5AS first', render());
+const immoOp = (what, fn) => LIVE.immo ? exclusive(what, fn, '5AS') : (S.alert = 'Connect the 5AS in Modules → 5AS first', render());
 function immoRows() {
   const p = LIVE.immo.data || [], b7 = (i) => i < p.length ? (p[i] & 0x80 ? 'Active' : 'Inactive') : '–';
   const serial = p.length > 22 ? (p[20] | p[21] << 8 | p[22] << 16).toString(16).toUpperCase().padStart(6, '0') : '–';
@@ -1419,7 +1443,7 @@ function immoRows() {
 
 // --- Bosch 5.3 ABS (BoschABS53, KW1281 blocks handled on the Pi) ---
 async function absReceive(ms = 2000) {
-  const body = await LIVE.link.kwReceive(ms);
+  const body = await AL().link.kwReceive(ms);
   if (!body || body.length < 2) return null;
   traffic('RX', body, 'KW1281 block');
   LIVE.abs.counter = body[0];
@@ -1429,14 +1453,14 @@ async function absSend(title, data = []) {
   LIVE.abs.counter = (LIVE.abs.counter + 1) & 0xff;
   const body = [LIVE.abs.counter, title, ...data];
   traffic('TX', body, 'KW1281 block');
-  await LIVE.link.command(CMD.kwBlock, body, 3000);
+  await AL().link.command(CMD.kwBlock, body, 3000);
 }
 function absConnect() {
   return exclusive('Connecting to ABS…', async () => {
-    await claim('ABS');
+    await openModule('ABS');
     LIVE.abs = { counter: 0, ident: [], faults: null };
-    try { await line.configure('ABS'); await LIVE.link.command(CMD.kwMode, [1]); await line.slowInit(0x20, true, false); }
-    catch (e) { LIVE.abs = null; LIVE.owner = null; await LIVE.link.command(CMD.kwMode, [0]).catch(() => {}); throw e; }
+    try { await AL().configure(); await AL().link.command(CMD.kwMode, [1]); await AL().slowInit(0x20, true, false); }
+    catch (e) { LIVE.abs = null; await releaseModule('ABS'); throw e; }
     for (let i = 0; i < 8; i++) {
       const b = await absReceive();
       if (!b || b.title === 0x09) break;
@@ -1444,9 +1468,9 @@ function absConnect() {
       if (t) LIVE.abs.ident.push(t);
       await absSend(0x09);
     }
-  });
+  }, 'ABS');
 }
-const absOp = (what, fn) => LIVE.abs ? exclusive(what, fn) : (S.alert = 'Connect the ABS in Modules → ABS first', render());
+const absOp = (what, fn) => LIVE.abs ? exclusive(what, fn, 'ABS') : (S.alert = 'Connect the ABS in Modules → ABS first', render());
 async function absReadFaults() {
   await absSend(0x07);
   const faults = [];
@@ -1462,7 +1486,7 @@ async function absReadFaults() {
 }
 
 // --- Live screens ---
-const busyRow = () => LIVE.busy ? `<div class="row"><div class="spinner"></div><span class="lbl">${esc(LIVE.busy)}</span></div>` : '';
+const busyRow = (key = 'bridge') => LIVE.busy[key] ? `<div class="row"><div class="spinner"></div><span class="lbl">${esc(LIVE.busy[key])}</span></div>` : '';
 const needBridge = (what) => ({ title: what, body: msgs() + `<div class="empty"><b>No bridge</b>Connect to the Pi's USB bridge in More → Adapter first.</div>` + sec([btn('Open Adapter', 'route:adapter')]) });
 const liveScreens = {
   adapter: () => {
@@ -1473,7 +1497,7 @@ const liveScreens = {
       rows.push(LIVE.link ? btn('Disconnect', 'livebridge:off', 'destructive') : btn('Connect', 'livebridge:on'));
     } else rows.push(S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn'));
     let body = msgs() + sec(rows, 'Rover Bridge (Webasto, 5AS, ABS)', sim ? 'A virtual 5AS, Bosch ABS and Webasto, for trying the app without the car.'
-      : `Served by ${LIVE.info.hostname}. The page talks to the Rover USB Bridge on the Pi, which drives one USB cable per module. While this page uses the bridge, the iPhone app cannot.`);
+      : `Served by ${LIVE.info.hostname}. The page talks to the Rover USB Bridge on the Pi, which drives one USB cable per module. Each module gets its own session and cable, so the heater, the 5AS and the ABS can run at the same time.`);
     if (!sim) body += sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])).concat(LIVE.link ? [btn('Refresh device list', 'livebridge:devices')] : []), 'USB cables',
       'Which /dev/ttyUSBx each module uses (engine: Engine tab, now ' + S.ecuPort + '). A change applies the next time a module connects.'
         + (LIVE.link ? (LIVE.devices.length ? ' Found: ' + LIVE.devices.join(', ') + '.' : ' The Pi reports no USB serial devices.') : '')
@@ -1484,10 +1508,10 @@ const liveScreens = {
   heater: () => {
     if (!LIVE.link) return needBridge('Webasto heater');
     const h = LIVE.heater;
-    if (!h) return { title: 'Webasto heater', body: msgs() + sec([busyRow() || btn('Connect to heater', 'liveheat:connect')], 'W-Bus', `2400 baud 8E1 on ${S.devices.Webasto}. Ignition not needed.`) };
+    if (!h) return { title: 'Webasto heater', body: msgs() + sec([busyRow('Webasto') || btn('Connect to heater', 'liveheat:connect')], 'W-Bus', `2400 baud 8E1 on ${S.devices.Webasto}. Ignition not needed.`) };
     const st = liveHeaterStatus();
     let body = msgs() + sec(h.ident.filter(([id]) => [0x0B, 0x07, 0x04, 0x0A].includes(id)).map(([id, n, d]) => lv(n, esc(wIdent(id, d))))
-      .concat([busyRow(), btn('Disconnect', 'liveheat:disconnect', 'destructive')]), 'W-Bus');
+      .concat([busyRow('Webasto'), btn('Disconnect', 'liveheat:disconnect', 'destructive')]), 'W-Bus');
     body += `<div class="sec"><div class="sec-h">Control</div><div class="group"><div class="row"><span class="lbl" style="flex:none">Run time</span><input type="range" class="slider" id="minutes" min="10" max="120" step="5" value="${S.heater.minutes}" aria-label="Run time"><span class="val" style="width:60px">${S.heater.minutes} min</span></div>
       <div class="btns"><button class="pill prim" data-act="heat:Parking heater">🔥 Heat</button><button class="pill" data-act="heat:Ventilation">Vent</button><button class="pill red" data-act="heatoff">Off</button></div>
       ${h.mode ? `<div class="row warn"><span class="lbl" style="font-size:13px">${esc(h.mode)} running – keep-alive every 10 s while this page is open</span></div>` : ''}</div>
@@ -1512,13 +1536,13 @@ const liveScreens = {
     if (!LIVE.heater) return needBridge('Fault memory');
     const e = LIVE.heater.errors;
     return { title: 'Fault memory', small: true, body: msgs() + sec(e.length ? e.map(([c, n]) => `<div class="row"><span class="lbl"><span class="mono"><b>0x${hex2(c)}</b></span> ${esc(WBUS_ERR_ALL[c] || 'Unknown fault')}<small>Occurred ${n}×</small></span></div>`) : [lv('No stored faults', '')], 'Stored faults')
-      + sec([busyRow(), btn('Re-read', 'liveheat:errors'), btn('Clear fault memory', 'confirm:hclear', 'destructive')]) };
+      + sec([busyRow('Webasto'), btn('Re-read', 'liveheat:errors'), btn('Clear fault memory', 'confirm:hclear', 'destructive')]) };
   },
   immo: () => {
     if (!LIVE.link) return needBridge('5AS immobiliser');
     const i = LIVE.immo;
-    if (!i) return { title: '5AS immobiliser', small: true, body: msgs() + sec([busyRow() || btn('Connect (normal mode)', 'liveimmo:connect')], 'Connection', `16-pin OBD pins 1/3 on ${S.devices['5AS']}, 12 V levels; the cable must invert the signals. EEPROM mode is only in the iPhone app.`) };
-    return { title: '5AS immobiliser', small: true, body: msgs() + sec([lv('Mode', `Normal (0x1C), key bytes ${hexs(i.kw)}`), busyRow(), btn('Disconnect', 'liveimmo:disconnect', 'destructive')], 'Connection')
+    if (!i) return { title: '5AS immobiliser', small: true, body: msgs() + sec([busyRow('5AS') || btn('Connect (normal mode)', 'liveimmo:connect')], 'Connection', `16-pin OBD pins 1/3 on ${S.devices['5AS']}, 12 V levels; the cable must invert the signals. EEPROM mode is only in the iPhone app.`) };
+    return { title: '5AS immobiliser', small: true, body: msgs() + sec([lv('Mode', `Normal (0x1C), key bytes ${hexs(i.kw)}`), busyRow('5AS'), btn('Disconnect', 'liveimmo:disconnect', 'destructive')], 'Connection')
       + sec([btn('Read status', 'liveimmo:read'), ...immoRows()], 'Status')
       + sec([['Horn', 8], ['5AS LED', 9], ['Hazard lights', 13]].map(([n, k]) => tog(n, i.tests[k], 'immo:' + k, `0x3${k.toString(16).toUpperCase()} / 0x2${k.toString(16).toUpperCase()}`)), 'Output tests')
       + sec([btn('Start key fob programming (0x5F)', 'liveimmo:fobstart'), btn('End key fob programming (0x6F)', 'liveimmo:fobend')], 'Key fobs', 'Start programming, press a button on each fob you want to keep (up to 4), then end programming.') };
@@ -1526,8 +1550,8 @@ const liveScreens = {
   abs: () => {
     if (!LIVE.link) return needBridge('ABS');
     const a = LIVE.abs;
-    if (!a) return { title: 'ABS', small: true, body: msgs() + sec([busyRow() || btn('Connect to ABS', 'liveabs:connect')], 'Bosch 5.3 ABS (experimental)', `K-line, 5-baud address 0x20, on ${S.devices.ABS}.`) };
-    return { title: 'ABS', small: true, body: msgs() + sec(a.ident.map(t => lv(esc(t), '', 'mono')).concat([busyRow(), btn('Disconnect', 'liveabs:disconnect', 'destructive')]), 'Bosch 5.3 ABS')
+    if (!a) return { title: 'ABS', small: true, body: msgs() + sec([busyRow('ABS') || btn('Connect to ABS', 'liveabs:connect')], 'Bosch 5.3 ABS (experimental)', `K-line, 5-baud address 0x20, on ${S.devices.ABS}.`) };
+    return { title: 'ABS', small: true, body: msgs() + sec(a.ident.map(t => lv(esc(t), '', 'mono')).concat([busyRow('ABS'), btn('Disconnect', 'liveabs:disconnect', 'destructive')]), 'Bosch 5.3 ABS')
       + sec([btn('Read faults', 'liveabs:faults'), ...(a.faults === null ? [] : a.faults.length ? a.faults.map(([c, s]) => lv('Code ' + String(c).padStart(5, '0'), 'status 0x' + hex2(s), 'bad')) : [lv('✓ No faults reported', '', 'ok')]),
         btn('Clear faults', 'liveabs:clear')], 'Fault codes') };
   },
@@ -1561,13 +1585,13 @@ act = (a) => {
   if (k === 'livebridge') { if (arg === 'on') bridgeConnect(); else if (arg === 'off') bridgeDisconnect(); else exclusive('Listing devices…', async () => { LIVE.devices = await LIVE.link.listDevices(); }); return; }
   if (k === 'liveheat') {
     if (arg === 'connect') heaterConnect();
-    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'disconnect') exclusive('Disconnecting…', () => releaseModule('Webasto'), 'Webasto');
     if (arg === 'errors') heaterOp('Reading fault memory', heaterReadErrors);
     return;
   }
   if (k === 'liveimmo') {
     if (arg === 'connect') immoConnect();
-    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'disconnect') exclusive('Disconnecting…', () => releaseModule('5AS'), '5AS');
     if (arg === 'read') immoOp('Reading status', immoRead);
     if (arg === 'fobstart') immoOp('Key fob programming', async () => { await immoCommand(0x5F); S.alert = 'Key fob programming started: press a button on each fob to keep'; });
     if (arg === 'fobend') immoOp('Key fob programming', async () => { await immoCommand(0x6F); S.alert = 'Key fob programming ended'; });
@@ -1575,7 +1599,7 @@ act = (a) => {
   }
   if (k === 'liveabs') {
     if (arg === 'connect') absConnect();
-    if (arg === 'disconnect') exclusive('Disconnecting…', releaseOwner);
+    if (arg === 'disconnect') exclusive('Disconnecting…', () => releaseModule('ABS'), 'ABS');
     if (arg === 'faults') absOp('Reading faults', absReadFaults);
     if (arg === 'clear') absOp('Clearing faults', async () => { await absSend(0x05); await absReceive(); await absReadFaults(); });
     return;
