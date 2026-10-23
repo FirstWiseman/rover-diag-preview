@@ -254,16 +254,18 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>
 const S = {
   tab: 'overview', stack: { overview: [], engine: [], heater: [], modules: [], more: [] },
   expert: false, adapterKind: 'Wi-Fi', adapterConnected: true,
-  agentSource: 'Simulator', host: 'raspberrypi.local', port: '8080',
+  agentSource: 'Adapter', host: 'raspberrypi.local', port: '8080',
   ecu: '1.9', running: true, selectedECU: '1.9', connectedAt: 0, faultsCleared: false, alert: null,
   outputs: {}, tick: 0, logTab: 'bridge',
   heater: { connected: true, mode: null, minutes: 30, temp: 8, errors: [[0x02, 3], [0x84, 1]], monitoring: true },
   immo: { mode: 'normal', tests: {} },
   sheet: null, traffic: [], agentLog: [],
 };
-const ENGINE_SOURCES = ['Rover (Pi)', 'rover-mems-agent', 'Simulator'];
+const ENGINE_SOURCES = ['Adapter', 'Rover Engine (Pi)', 'rover-mems-agent'];
+// The engine through the adapter: the simulator, or (when the Pi serves this page) Rover Engine on that Pi.
+const engineSimulated = () => S.agentSource === 'Adapter' && (S.adapterKind === 'Simulator' || !LIVE.on);
 // Rover Engine has the documented MEMS 1.x commands the agent lacks.
-const ownEngine = () => S.agentSource === 'Rover (Pi)' && ['1.9', '1.x'].includes(S.selectedECU || S.ecu);
+const ownEngine = () => S.agentSource !== 'rover-mems-agent' && !engineSimulated() && ['1.9', '1.x'].includes(S.selectedECU || S.ecu);
 const ECUS = { '1.9': 'MEMS 1.9 (16-pin OBD)', '1.x': 'MEMS 1.2 / 1.3 / 1.6 (3-pin)', '2J': 'MEMS 2J', '3': 'MEMS 3', 'rc5': 'RC5 SRS airbag' };
 const now = () => performance.now();
 S.connectedAt = now() - 5000;
@@ -373,16 +375,22 @@ try { const v = JSON.parse(localStorage.getItem('roverDiagDevices') || 'null'); 
 function saveDevices() { try { localStorage.setItem('roverDiagDevices', JSON.stringify({ devices: S.devices, ecuPort: S.ecuPort, usbHost: S.usbHost, adapterKind: S.adapterKind, bridgeDevice: S.bridgeDevice })); } catch (e) {} }
 const devSelect = (l, change, cur) => `<div class="row"><span class="lbl">${esc(l)}</span><select class="select" data-change="${change}">${[...new Set(USB_PORTS.concat(LIVE.devices, [cur]))].map(d => `<option ${d === cur ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`;
 
+// Engine connection rows, on the Engine tab and the Adapter page.
+const engineSourceSec = () => sec([`<div class="row"><span class="lbl">Connection</span><select class="select" data-change="agentSource" ${S.running ? 'disabled' : ''}>${ENGINE_SOURCES.map(o => `<option ${S.agentSource === o ? 'selected' : ''}>${o}</option>`).join('')}</select></div>`,
+  devSelect('ECU cable', 'ecuPort', S.ecuPort)], 'Engine connection',
+  S.agentSource === 'Adapter' ? 'The engine ECU and the airbag through this adapter (Wi-Fi, Bluetooth or the simulator). Rover speaks MEMS 1.9, 1.x and RC5 itself.'
+    : S.agentSource === 'rover-mems-agent' ? 'rover-mems-agent on the Pi (port 8080), for all MEMS versions including 2J and 3.' : 'Rover Engine on the Pi (port 8081); keeps running for the widget when the app is closed.');
+
 // ---------- Screens ----------
 const screens = {
   adapter: () => {
     const kind = S.adapterKind, dev = S.bridgeDevice, pi = dev === 'Raspberry Pi', sim = kind === 'Simulator';
     const name = BRIDGE_NAMES[dev], cables = pi && !sim;
     const info = sim ? 'Simulator (virtual 5AS, ABS and Webasto)' : pi ? 'RoverUSBBridge 1.0' + (kind === 'Bluetooth' ? ' via RoverPi' : '') : `RoverBridge 1.1 (${dev})`;
-    const foot = sim ? 'A virtual 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car. The engine has its own simulator in the Engine tab.'
-      : kind === 'Bluetooth' ? (pi ? 'Connects to the Pi\'s Bluetooth LE service "RoverPi" (installed by the rover-pi package), which passes everything to the USB bridge and its cables. The engine still uses the agent over Wi-Fi.'
+    const foot = sim ? 'A virtual engine ECU, 5AS, Bosch ABS and Webasto Thermo Top, for trying the app without the car.'
+      : kind === 'Bluetooth' ? (pi ? 'Connects to the Pi\'s Bluetooth LE service "RoverPi" (installed by the rover-pi package), which passes everything to the USB bridge and its cables, the engine\'s included. One module at a time over Bluetooth.'
         : `Connects to the ${dev} bridge "${name}" over Bluetooth LE. See Firmware/rover-bridge.`)
-      : pi ? 'The USB bridge runs next to rover-mems-agent on the Raspberry Pi 3B (installed by the rover-pi package), with one USB cable per module. Uses the agent\'s address by default, port 35000.'
+      : pi ? 'The USB bridge on the Raspberry Pi (installed by the rover-pi package), with one USB cable per module; the engine, Webasto and 5AS can run at the same time. Port 35000.'
         : `Join the bridge's Wi-Fi network "${name}" first (password rover400). Address 192.168.4.1, port 35000. See Firmware/rover-bridge.`;
     return { title: 'Rover', body:
     sec([`<div class="row"><span class="lbl">Bridge device</span><select class="select" data-change="bridgeDevice" ${S.adapterConnected ? 'disabled' : ''}>${Object.keys(BRIDGE_NAMES).map(d => `<option ${d === dev ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>`,
@@ -390,22 +398,24 @@ const screens = {
       ...(kind === 'Wi-Fi' ? [`<div class="row"><input class="input" id="usbhost" value="${esc(pi ? S.usbHost : '192.168.4.1')}" aria-label="${pi ? 'Pi address' : 'Bridge IP'}" ${pi ? '' : 'disabled'}><span>:</span><input class="input" style="flex:0 0 56px" value="35000" aria-label="Port" disabled></div>`] : []),
       S.adapterConnected ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${esc(info)}</span>`) : lv('Not connected', '', ''),
       S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn')],
-      'Rover Bridge (Webasto, 5AS, ABS)', foot)
+      'Rover Bridge (engine, Webasto, 5AS, ABS)', foot) + engineSourceSec()
     + (cables ? sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])),
-      'USB cables', 'Which /dev/ttyUSBx each module uses. The engine ECU cable is chosen in the Engine tab (now ' + S.ecuPort + '). A change applies the next time a module connects.'
+      'USB cables', 'Which /dev/ttyUSBx each module uses. The engine ECU cable is chosen under Engine connection (now ' + S.ecuPort + '). A change applies the next time a module connects.'
         + (S.adapterConnected ? ' Found: ' + USB_PORTS.filter(d => d !== '/dev/ttyUSB2').join(', ') + '.' : '')
         + (S.devices.ABS === S.ecuPort ? ' ABS shares the engine\'s K-line and cable: stop the engine connection before reading the ABS.' : '')) : '')
     + sec([tog('Expert mode', S.expert, 'expert')], 'Expert', "Shows the agent's MEMS 2J research commands, 5AS EEPROM writing, undocumented 5AS tests, Webasto component tests and the raw W-Bus console.")
-    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9 – agent'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS – agent'), lv('Aux. heater', 'Webasto (W-Bus)'), lv('Diag. computer', 'Raspberry Pi 3B')], 'Your car') }; },
+    + sec([lv('Model', 'Rover 400 (HH-R), 1999'), lv('Engine', '1.6 K-series (16K4F)'), lv('Engine ECU', 'MEMS 1.9'), lv('Immobiliser', 'Lucas 5AS'), lv('ABS', 'Bosch 5.3'), lv('Airbag', 'RC5 SRS'), lv('Aux. heater', 'Webasto (W-Bus)'), lv('Diag. computer', 'Raspberry Pi 3B')], 'Your car') }; },
 
   engine: () => {
     const rows = [`<div class="row"><span class="lbl">Source</span><select class="select" data-change="agentSource">${ENGINE_SOURCES.map(o => `<option ${S.agentSource === o ? 'selected' : ''}>${o}</option>`).join('')}</select></div>`];
-    if (S.agentSource !== 'Simulator' && !LIVE.on) rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
+    if (S.agentSource === 'Adapter') rows.push(lv('Adapter', esc(S.adapterKind === 'Simulator' || !LIVE.on ? 'Simulator' : S.adapterKind + ' · ' + S.bridgeDevice)));
+    if (S.agentSource !== 'Adapter' && !LIVE.on) rows.push(`<div class="row"><input class="input" id="host" value="${esc(S.host)}" aria-label="Agent IP" ${S.running ? 'disabled' : ''}><span>:</span><input class="input" id="port" style="flex:0 0 50px" value="${esc(S.port)}" aria-label="Port" ${S.running ? 'disabled' : ''}></div>`);
     const ver = (v) => /^\d/.test(v) ? 'v' + v : v;
-    if (S.running) rows.push(lv(S.agentSource === 'rover-mems-agent' ? 'Agent' : 'Engine service', liveEngine() ? (LIVE.status ? `<span style="color:var(--green)">✓ ${esc(ver(LIVE.status.agentVersion || '?'))}</span>` : 'Waiting…') : `<span style="color:var(--green)">✓ ${S.agentSource === 'Simulator' ? 'Simulator' : 'v1.4.3'}</span>`));
+    if (S.running) rows.push(lv(S.agentSource === 'rover-mems-agent' ? 'Agent' : 'Engine service', liveEngine() ? (LIVE.status ? `<span style="color:var(--green)">✓ ${esc(ver(LIVE.status.agentVersion || '?'))}</span>` : 'Waiting…') : `<span style="color:var(--green)">✓ ${engineSimulated() ? 'Simulator' : S.agentSource === 'rover-mems-agent' ? 'v1.4.3' : 'RoverEngine 1.0'}</span>`));
     rows.push(devSelect('ECU cable', 'ecuPort', S.ecuPort));
     const where = LIVE.on ? 'on ' + LIVE.info.hostname + ', reached through this page' : 'on the Raspberry Pi 3B (rover-pi package)';
-    let body = sec(rows, 'Engine connection', S.agentSource === 'Simulator' ? 'Simulated engine with MEMS 1.9, 1.x, 2J, 3 and RC5 data, and three USB cables.'
+    let body = sec(rows, 'Engine connection', engineSimulated() ? 'Through the adapter, which is the simulator: a simulated engine with MEMS 1.9, 1.x, 2J, 3 and RC5 data. In the iPhone app the adapter can also be the Pi or an ESP32 over Wi-Fi or Bluetooth; Rover then speaks MEMS itself.'
+      : S.agentSource === 'Adapter' ? `Through the adapter, ${where}: Rover Engine on this Pi runs MEMS 1.9, 1.x and RC5 on the ECU cable ${S.ecuPort}.`
       : S.agentSource === 'rover-mems-agent' ? `Optional: rover-mems-agent ${where} (port 8080), for all MEMS versions including 2J and 3. It keeps the ECU cable until it is restarted, even after Stop.`
       : `Rover's own engine service ${where} (port 8081): MEMS 1.9, MEMS 1.2/1.3/1.6 and the RC5 airbag, on the ECU cable ${S.ecuPort}. Stop releases the cable. For MEMS 2J and 3 choose rover-mems-agent.`);
     const ecuRows = [`<div class="row"><span class="lbl">ECU</span><select class="select" data-change="ecu">${['1.9', '1.x', '2J', '3'].map(e => `<option value="${e}" ${S.ecu === e ? 'selected' : ''}>${ECUS[e].replace(/ \(.*\)/, '')}</option>`).join('')}</select></div>`];
@@ -601,7 +611,31 @@ Object.assign(screens, {
     body += sec([btn('Reset to default', 'ov:reset', 'destructive')]);
     return { title: 'Edit Overview', small: true, body, right: ['Done', 'back', true] };
   },
-  more: () => ({ title: 'More', body: sec([link('Adapter', 'adapter'), link('Console', 'console')]) }),
+  more: () => ({ title: 'More', body: sec([link('Adapter', 'adapter'), link('Console', 'console'), link('Settings', 'settings')]) }),
+  settings: () => ({ title: 'Settings', body:
+    sec(CARD_PARTS.map(p => { const c = cardOf(p); return `<div class="row link" tabindex="0" data-act="cardopen:${p}"><span class="lbl">${esc(c.title)}<small>${esc(c.items.map(itemName).join(' · ') || c.note || 'Empty')}</small></span><span class="val">${CARDS[p] ? 'Edited' : 'Standard'}</span></div>`; }),
+      'Car info cards', 'What opens when you tap a part of the 3D car on the Overview: its title, a note of your own, the values, actions and blocks it shows and their order. ✎ on an open card leads to the same editor.')
+    + sec([btn('Reset all cards', 'card:resetall', 'destructive')]) }),
+  cardedit: () => {
+    const p = S.cardPart || 'engine', c = cardOf(p), n = c.items.length;
+    const row = (id, i) => `<div class="row"><button class="ib del" data-act="card:del:${id}" aria-label="Remove ${esc(itemName(id))}">−</button><span class="lbl">${esc(itemName(id))}</span>`
+      + `<button class="ib" data-act="card:up:${id}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="ib" data-act="card:down:${id}" ${i === n - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></div>`;
+    const add = (id, sub = '') => `<div class="row"><button class="ib add" data-act="card:add:${id}" aria-label="Add ${esc(itemName(id))}">+</button><span class="lbl">${esc(itemName(id))}${sub ? `<small>${esc(sub)}</small>` : ''}</span></div>`;
+    let body = sec([`<div class="row"><input class="input" id="cardTitle" value="${esc(c.title)}" placeholder="${esc(PART_NAMES[p])}" aria-label="Title"></div>`], 'Title');
+    body += sec([`<div class="row"><textarea class="input" id="cardNote" rows="3" style="resize:vertical" placeholder="Your note, e.g. where the fuse is" aria-label="Note">${esc(c.note)}</textarea></div>`], 'Note', 'Shown at the top of the card.');
+    body += sec(n ? c.items.map(row) : [lv('Nothing yet – add rows below.', '')], 'Shown');
+    const free = (ids) => ids.filter(id => !c.items.includes(id));
+    const blocks = free(Object.keys(BLOCKS).map(b => 'block.' + b));
+    if (blocks.length) body += sec(blocks.map(id => add(id)), 'Add blocks');
+    const acts = free(ACTUATORS.map(a => a.id));
+    if (acts.length) body += sec(acts.map(id => add(id, { toggle: 'On / off', stepper: 'Step − / +', command: 'Command', heat: 'Webasto', vent: 'Webasto', off: 'Webasto' }[ACT[id].kind])), 'Add actions (MEMS 1.9)');
+    const eng = free(FIELDS.map(f => 'engine.' + f[0]));
+    if (eng.length) body += sec(eng.map(id => add(id, id.slice(7))), 'Add engine values');
+    const heat = free(Object.keys(HEATER_VALUES).map(k => 'heater.' + k));
+    if (heat.length) body += sec(heat.map(id => add(id)), 'Add Webasto values');
+    if (CARDS[p]) body += sec([btn('Reset to standard', 'card:reset', 'destructive')]);
+    return { title: PART_NAMES[p], small: true, body, right: ['Done', 'back', true] };
+  },
 });
 
 // ---------- 3D car: SketchUp Rover 400 Saloon (Rover400.glb), laid out like RoverCore's RoverCar ----------
@@ -835,9 +869,67 @@ function quickActions() {
     + `${q('⚠︎', 'Hazards', 'immo:13', S.immo.tests[13], S.adapterConnected, true)}</div>`;
 }
 
+// Info cards of the car's parts: title, note and rows, editable in More → Settings or with ✎ on the card.
+const CARD_STD = {
+  engine: { note: '', items: ['engine.rpm', 'engine.coolant_temp', 'engine.map_sensor_kpa', 'block.engineFaults'] },
+  fan: { note: '', items: ['engine.coolant_temp', 'engine.fan_1_control', 'engine.toggle.startTestFan1'] },
+  fuel: { note: 'Engine off. Listen for the pump under the rear seat.', items: ['engine.toggle.startTestFuelPump'] },
+  heater: { note: '', items: ['heater.Coolant temperature', 'heater.Heating power', 'heater.Flame detected', 'block.heaterMode', 'block.heaterControls'] },
+  battery: { note: '', items: ['engine.battery_voltage', 'heater.Supply voltage', 'block.batteryState'] },
+  abs: { note: '', items: ['block.absFaults'] },
+  srs: { note: '', items: ['block.srsFaults'] },
+  alarm: { note: '', items: ['block.immoStatus', 'block.immoTests'] },
+};
+const CARD_PARTS = Object.keys(CARD_STD);
+const BLOCKS = { engineFaults: 'Engine fault codes (with clear)', heaterMode: 'Webasto mode', heaterControls: 'Webasto Heat / Vent / Off',
+  batteryState: 'Battery state (from the ECU voltage)', absFaults: 'ABS identification and faults', srsFaults: 'Airbag faults (with clear)',
+  immoStatus: '5AS doors, bonnet, boot, ignition', immoTests: '5AS tests (horn, hazards, LED …)' };
+let CARDS = {};
+try { const v = JSON.parse(localStorage.getItem('roverCards') || 'null'); if (v && typeof v === 'object') CARDS = v; } catch (e) {}
+const cardOf = (p) => CARDS[p] || { title: PART_NAMES[p], note: CARD_STD[p].note, items: [...CARD_STD[p].items] };
+function saveCard(p, c) {
+  const std = { title: PART_NAMES[p], ...CARD_STD[p] };
+  if (JSON.stringify(c) === JSON.stringify({ title: std.title, note: std.note, items: std.items })) delete CARDS[p]; else CARDS[p] = c;
+  try { localStorage.setItem('roverCards', JSON.stringify(CARDS)); } catch (e) {}
+}
+const itemName = (id) => id.startsWith('block.') ? BLOCKS[id.slice(6)] || id : ACT[id] ? ACT[id].name : ovName(id);
+const needsEngine = (id) => (id.startsWith('engine.') && !ACT[id]) || id === 'block.engineFaults' || id === 'block.batteryState';
+const needsHeater = (id) => (id.startsWith('heater.') && !ACT[id]) || id === 'block.heaterMode';
+function blockRows(b) {
+  const eng = engineLive(), heat = heaterLive(), hs = heaterStatus();
+  switch (b) {
+    case 'engineFaults': return [lv('Fault codes', faults().length ? `<span style="color:var(--red)">${faults().join(', ')}</span>` : eng ? 'None' : '–'), ...(eng ? [btn('Clear fault codes', 'confirm:clearfaults')] : [])];
+    case 'heaterMode': return [lv('Mode', heat ? esc(S.heater.mode || 'Off') : '–')];
+    case 'heaterControls': return heat ? [`<div class="btns"><button class="pill prim" data-act="heat:Parking heater">Heat ${S.heater.minutes} min</button><button class="pill" data-act="heat:Ventilation">Vent</button><button class="pill red" data-act="heatoff">Off</button></div>`] : [];
+    case 'batteryState': { const v = ecuData().battery_voltage; return [lv('State', !eng ? '–' : v >= 13.2 ? 'Charging' : v >= 12.4 ? 'OK' : '<span style="color:var(--orange)">Low</span>')]; }
+    case 'absFaults': return [lv('Module', 'Bosch 5.3 (RGRWDABS530)'), lv('Code 00035', 'status 0x2A', 'bad'), lv('Code 00321', 'status 0x23', 'bad'), btn('Open ABS', 'route:abs')];
+    case 'srsFaults':
+      if (S.selectedECU === 'rc5' && ecuConnected()) return [...(faults().length ? faults().map(f => lv('⚠︎ ' + f, '', 'bad')) : [lv('✓ No faults', '', 'ok')]), btn('Clear airbag faults', 'confirm:clearfaults', 'destructive')];
+      return [lv('Connect the airbag module in Modules → RC5 SRS', ''), btn('Open RC5 SRS', 'route:srs')];
+    case 'immoStatus': return [lv('Doors', 'Closed'), lv('Bonnet', 'Closed'), lv('Boot', 'Closed'), lv('Ignition', 'On')];
+    case 'immoTests': return [tog('Hazard lights test', S.immo.tests[13], 'immo:13'), tog('Horn test', S.immo.tests[8], 'immo:8'), tog('5AS LED test', S.immo.tests[9], 'immo:9')];
+  }
+  return [];
+}
+function cardRows(p) {
+  const c = cardOf(p), rows = [];
+  if (c.note) rows.push(`<div class="row"><span class="lbl"><small style="font-size:15px">${esc(c.note)}</small></span></div>`);
+  if (c.items.some(needsEngine) && !engineLive()) rows.push(lv('Connect the ECU in the Engine tab', ''));
+  if (c.items.some(needsHeater) && !heaterLive()) rows.push(lv('Connect the heater in the Webasto tab', ''));
+  if (!c.items.length && !c.note) rows.push(lv('Nothing chosen for this card. Tap ✎ to add values and actions.', ''));
+  for (const id of c.items) {
+    if (id.startsWith('block.')) rows.push(...blockRows(id.slice(6)));
+    else if (ACT[id]) rows.push(ovActuatorRow(ACT[id]));
+    else { const [v, u] = ovValue(id); rows.push(lv(itemName(id), `<b>${esc(v)}</b> ${esc(u)}`)); }
+  }
+  return rows;
+}
+
 function partCard(p) {
   const close = `<span class="val" data-act="part:" style="cursor:pointer" aria-label="Close">✕</span>`;
-  const head = `<div class="row"><span class="lbl"><b>${esc(PART_NAMES[p])}</b></span>${close}</div>`;
+  const edit = p === 'paint' ? '' : `<span class="val" data-act="cardopen:${p}" style="cursor:pointer;margin-right:14px" aria-label="Edit card">✎</span>`;
+  const head = `<div class="row"><span class="lbl"><b>${esc(p === 'paint' ? PART_NAMES[p] : cardOf(p).title)}</b></span>${edit}${close}</div>`;
+  if (p !== 'paint') return sec([head, ...cardRows(p)]);
   const val = (k, label) => { const [v, u] = ovValue(k); return lv(label, `<b>${esc(v)}</b> ${esc(u)}`); };
   const eng = engineLive(), heat = heaterLive(), hs = heaterStatus();
   const needEngine = eng ? [] : [lv('Connect the ECU in the Engine tab', '', '')];
@@ -923,7 +1015,7 @@ function morph(from, to) {
   for (const a of [...from.attributes]) if (!to.hasAttribute(a.name)) from.removeAttribute(a.name);
   for (const a of [...to.attributes]) if (from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
   // Leave a field the user is editing alone.
-  if (from === document.activeElement && ['INPUT', 'SELECT'].includes(from.tagName)) return;
+  if (from === document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(from.tagName)) return;
   const fc = [...from.childNodes], tc = [...to.childNodes];
   tc.forEach((n, i) => { if (fc[i]) morph(fc[i], n); else from.appendChild(n); });
   for (let i = tc.length; i < fc.length; i++) fc[i].remove();
@@ -1002,6 +1094,17 @@ function act(a) {
       saveOverview();
       break;
     }
+    case 'cardopen': S.cardPart = arg; S.stack[S.tab].push('cardedit'); break;
+    case 'card': {
+      const [op, ...rest] = arg.split(':'), id = rest.join(':'), p = S.cardPart, c = cardOf(p), L = c.items, i = L.indexOf(id);
+      if (op === 'resetall') { CARDS = {}; try { localStorage.removeItem('roverCards'); } catch (e) {} break; }
+      if (op === 'reset') { delete CARDS[p]; try { localStorage.setItem('roverCards', JSON.stringify(CARDS)); } catch (e) {} break; }
+      if (op === 'del' && i >= 0) L.splice(i, 1);
+      if (op === 'add' && i < 0) L.push(id);
+      if ((op === 'up' || op === 'down') && i >= 0) { const j = i + (op === 'up' ? -1 : 1); if (j >= 0 && j < L.length) [L[i], L[j]] = [L[j], L[i]]; }
+      saveCard(p, c);
+      break;
+    }
     case 'logTab': S.logTab = arg === 'Agent log' ? 'agent' : 'bridge'; break;
   }
   render();
@@ -1031,13 +1134,18 @@ document.addEventListener('change', (e) => {
 document.addEventListener('input', (e) => {
   if (e.target.id === 'minutes') { S.heater.minutes = +e.target.value; e.target.closest('.row').querySelector('.val').textContent = `${S.heater.minutes} min`; }
   if (e.target.id === 'host') S.host = e.target.value;
+  if (e.target.id === 'cardTitle' || e.target.id === 'cardNote') {
+    const c = cardOf(S.cardPart);
+    if (e.target.id === 'cardTitle') c.title = e.target.value || PART_NAMES[S.cardPart]; else c.note = e.target.value;
+    saveCard(S.cardPart, c);
+  }
   if (e.target.id === 'port') S.port = e.target.value;
   if (e.target.id === 'usbhost') { S.usbHost = e.target.value; saveDevices(); }
   if (e.target.id === 'carColor') { paintSet(e.target.value); carApplyPaint(); const c = e.target.closest('.sec'); if (c) c.querySelectorAll('.swatch.on').forEach(x => x.classList.remove('on')); }
 });
 
 // ---------- Deep links (#engine, #live, #heater …) ----------
-const ROUTES = { overview: ['overview'], ovedit: ['overview', 'ovedit'], more: ['more'], adapter: ['more', 'adapter'], engine: ['engine'], live: ['engine', 'live'], faults: ['engine', 'faults'], tests: ['engine', 'tests'], adjust: ['engine', 'adjust'],
+const ROUTES = { overview: ['overview'], ovedit: ['overview', 'ovedit'], more: ['more'], adapter: ['more', 'adapter'], settings: ['more', 'settings'], engine: ['engine'], live: ['engine', 'live'], faults: ['engine', 'faults'], tests: ['engine', 'tests'], adjust: ['engine', 'adjust'],
   heater: ['heater'], hstatus: ['heater', 'hstatus'], herrors: ['heater', 'herrors'], modules: ['modules'], immo: ['modules', 'immo'], srs: ['modules', 'srs'], abs: ['modules', 'abs'], console: ['more', 'console'] };
 function route(name) {
   const r = ROUTES[name]; if (!r) return;
@@ -1058,7 +1166,7 @@ $('#jump').addEventListener('click', (e) => { const b = e.target.closest('[data-
 // (BridgeSerialLink, DiagLine, WebastoHeater, Immobiliser5AS, BoschABS53).
 const LIVE = { on: false, info: null, status: null, poll: null, link: null, lines: {}, busy: {}, devices: [],
   heater: null, immo: null, abs: null };
-const liveEngine = () => LIVE.on && S.agentSource !== 'Simulator';
+const liveEngine = () => LIVE.on && !engineSimulated();
 const liveBridge = () => LIVE.on && S.adapterKind !== 'Simulator';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, '0');
@@ -1511,12 +1619,13 @@ const liveScreens = {
       rows.push(busyRow() || (LIVE.link ? lv('', '', 'ok').replace('<span class="lbl"></span>', `<span class="lbl">✓ ${esc(LIVE.info.bridge || 'Bridge')}</span>`) : lv('Not connected', '')));
       rows.push(LIVE.link ? btn('Disconnect', 'livebridge:off', 'destructive') : btn('Connect', 'livebridge:on'));
     } else rows.push(S.adapterConnected ? btn('Disconnect', 'adapterOff', 'destructive') : btn('Connect', 'adapterOn'));
-    let body = msgs() + sec(rows, 'Rover Bridge (Webasto, 5AS, ABS)', sim ? 'A virtual 5AS, Bosch ABS and Webasto, for trying the app without the car.'
+    let body = msgs() + sec(rows, 'Rover Bridge (engine, Webasto, 5AS, ABS)', sim ? 'A virtual 5AS, Bosch ABS and Webasto, for trying the app without the car.'
       : `Served by ${LIVE.info.hostname}. The page talks to the Rover USB Bridge on the Pi, which drives one USB cable per module. Each module gets its own session and cable, so the heater, the 5AS and the ABS can run at the same time.`);
     if (!sim) body += sec(DEVICE_MODULES.map(([m, t]) => devSelect(t, 'dev:' + m, S.devices[m])).concat(LIVE.link ? [btn('Refresh device list', 'livebridge:devices')] : []), 'USB cables',
       'Which /dev/ttyUSBx each module uses (engine: Engine tab, now ' + S.ecuPort + '). A change applies the next time a module connects.'
         + (LIVE.link ? (LIVE.devices.length ? ' Found: ' + LIVE.devices.join(', ') + '.' : ' The Pi reports no USB serial devices.') : '')
         + (S.devices.ABS === S.ecuPort ? " ABS shares the engine's K-line and cable: stop the engine connection before reading the ABS." : ''));
+    body += engineSourceSec();
     body += sec([tog('Expert mode', S.expert, 'expert')], 'Expert');
     return { title: 'Rover', body };
   },
@@ -1665,7 +1774,7 @@ document.addEventListener('change', (e) => {
     if (!r.ok) return;
     LIVE.info = await r.json();
     LIVE.on = true;
-    S.agentSource = 'Rover (Pi)'; S.running = false; S.selectedECU = null;
+    S.running = false; S.selectedECU = null;
     if (S.adapterKind !== 'Simulator') S.adapterKind = 'This Pi';
     S.adapterConnected = false; S.heater.mode = null; S.traffic = []; S.agentLog = [];
     document.title = 'Rover – ' + LIVE.info.hostname;
